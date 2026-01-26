@@ -29,7 +29,7 @@ let firmwareUrl = "";
 let target = null;
 let port = null;
 let reader = null;
-let readableStreamClosed = null; // WICHTIG für sauberes Schließen
+let readableStreamClosed = null;
 let configScanActive = false;
 
 // --- INIT ---
@@ -122,16 +122,12 @@ export async function toggleSerial() {
     }
 
     try {
-        // Sicherstellen dass alles zu ist
         if (port) await closeSerial();
-
         port = await navigator.serial.requestPort({ filters: [{ usbVendorId: VENDOR_ATMEL }] });
         await port.open({ baudRate: 38400 });
-        
         isSerialConnected.value = true;
         serialLog.value += "[Verbunden]\n";
         readSerialLoop();
-
     } catch (e) {
         console.error(e);
         serialLog.value += `Fehler: ${e.message}\n`;
@@ -143,21 +139,14 @@ async function closeSerial() {
     if (reader) {
         try {
             await reader.cancel();
-            // WICHTIG: Warten auf das Ende des Streams
-            if (readableStreamClosed) {
-                await readableStreamClosed.catch(() => {});
-            }
+            if (readableStreamClosed) await readableStreamClosed.catch(() => {});
         } catch (e) { console.warn(e); }
         reader = null;
     }
-
     if (port) {
-        try {
-            await port.close();
-        } catch (e) { console.warn(e); }
+        try { await port.close(); } catch (e) { console.warn(e); }
         port = null;
     }
-    
     isSerialConnected.value = false;
 }
 
@@ -170,7 +159,7 @@ async function readSerialLoop() {
     try {
         while (true) {
             const { value, done } = await reader.read();
-            if (done) break; // Stream geschlossen via cancel
+            if (done) break;
             if (value) {
                 serialLog.value += value;
                 buffer += value;
@@ -184,12 +173,11 @@ async function readSerialLoop() {
         serialLog.value += `\n[Verbindung unterbrochen]\n`;
         isSerialConnected.value = false;
     } finally {
-        // Lock freigeben damit port.close() geht
         if (reader) reader.releaseLock();
     }
 }
 
-// --- COMMANDS & PARSING ---
+// --- COMMANDS ---
 
 export async function startConfigScan() {
     if (!isSerialConnected.value) { alert("Bitte erst verbinden!"); return; }
@@ -266,38 +254,61 @@ export async function jumpToBootloader() {
 async function connectDFU() {
     let devices = await navigator.usb.getDevices();
     let device = devices.find(d => d.vendorId === VENDOR_ATMEL && d.productId === PID_DFU_MODE);
+    
     if (!device) {
         try {
             device = await navigator.usb.requestDevice({ filters: [{ vendorId: VENDOR_ATMEL }] });
         } catch (e) { throw new Error("Kein Gerät ausgewählt."); }
     }
+    
     if (device.productId === PID_APP_MODE) { 
         isWrongMode.value = true; 
         throw new Error("App-Mode. Bitte erst in Bootloader wechseln."); 
     }
+    
+    // VERBINDUNGSAUFBAU
     if (!device.opened) await device.open();
     if (device.configuration === null) await device.selectConfiguration(1);
-    try { await device.claimInterface(0); } catch(e){}
+    
+    // FIX: Explizit claimen und Fehler melden, statt zu verschlucken!
+    try {
+        await device.claimInterface(0);
+    } catch(e) {
+        console.error("Claim Error:", e);
+        throw new Error("Zugriff verweigert (Interface Claim Failed). Bitte Zadig prüfen: Treiber muss WinUSB sein!");
+    }
+    
     return device;
 }
 
 async function runFlashSequence(hexData) {
     if(target) { try{await target.close();}catch(e){} target=null; }
-    target = await connectDFU();
+    
+    try {
+        target = await connectDFU();
 
-    message.value = "Lösche Flash-Speicher...";
-    await AtmelDFU.chipErase(target);
-    
-    message.value = `Schreibe ${hexData.length} Bytes...`;
-    await AtmelDFU.writeMemory(target, 0x0000, hexData.length - 1, hexData);
-    
-    message.value = "Verifiziere Daten...";
-    const mem = await AtmelDFU.readMemory(target, 0, hexData.length - 1);
-    for(let i=0; i<mem.byteLength; i++) if(mem[i]!==hexData[i]) throw new Error("Verify Error");
-    
-    message.value = "Starte CUL neu...";
-    await AtmelDFU.launch(target);
-    isSuccess.value = true; message.value = "Update erfolgreich abgeschlossen!";
+        message.value = "Lösche Flash-Speicher...";
+        await AtmelDFU.chipErase(target);
+        
+        message.value = `Schreibe ${hexData.length} Bytes...`;
+        await AtmelDFU.writeMemory(target, 0x0000, hexData.length - 1, hexData);
+        
+        message.value = "Verifiziere Daten...";
+        const mem = await AtmelDFU.readMemory(target, 0, hexData.length - 1);
+        for(let i=0; i<mem.byteLength; i++) if(mem[i]!==hexData[i]) throw new Error("Verify Error");
+        
+        message.value = "Starte CUL neu...";
+        await AtmelDFU.launch(target);
+        
+        isSuccess.value = true; 
+        message.value = "Update erfolgreich abgeschlossen!";
+        
+        // Nach erfolgreichem Flash Verbindung schließen
+        try{await target.close();}catch(e){} target=null;
+        
+    } catch(e) {
+        throw e; // Fehler weiterreichen
+    }
 }
 
 export async function programFlash() {
@@ -313,7 +324,6 @@ export async function programFlash() {
         console.error(e); 
         if(!isWrongMode.value) { isError.value = true; message.value = e.message; }
     } finally { 
-        if(target) { try{await target.close();}catch(e){} target=null; } 
         isFlashing.value = false; 
     }
 }
@@ -329,7 +339,6 @@ export async function uploadFirmware(file) {
         console.error(e);
         isError.value = true; message.value = "Fehler: " + e.message;
     } finally {
-        if(target) { try{await target.close();}catch(e){} target=null; } 
         isFlashing.value = false; 
     }
 }
