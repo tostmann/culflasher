@@ -26,10 +26,10 @@ export const deviceInfo = reactive({
 
 // Internals
 let firmwareUrl = "";
-let target = null; // WebUSB
-let port = null;   // WebSerial
+let target = null;
+let port = null;
 let reader = null;
-let readableStreamClosed = null; // WICHTIG für sauberes Trennen
+let readableStreamClosed = null; // WICHTIG für sauberes Schließen
 let configScanActive = false;
 
 // --- INIT ---
@@ -81,7 +81,6 @@ async function fetchLatestVersion() {
     }
 }
 
-// --- USB MONITORING ---
 function startUSBMonitoring() {
     if (!navigator.usb) return;
     navigator.usb.getDevices().then(devices => handleDevicesFound(devices));
@@ -108,24 +107,22 @@ function analyzeDevice(device) {
     }
 }
 
-// --- 2. SERIAL TERMINAL (ROBUST LOCK HANDLING) ---
+// --- 2. SERIAL TERMINAL ---
 
 export async function toggleSerial() {
-    // 1. TRENNEN
     if (isSerialConnected.value) {
         await closeSerial();
         serialLog.value += "\n[Getrennt]\n";
         return;
     }
 
-    // 2. VERBINDEN
     if (!navigator.serial) {
         serialLog.value += "Browser unterstützt kein Web Serial API.\n";
         return;
     }
 
     try {
-        // Sicherstellen, dass alles zu ist
+        // Sicherstellen dass alles zu ist
         if (port) await closeSerial();
 
         port = await navigator.serial.requestPort({ filters: [{ usbVendorId: VENDOR_ATMEL }] });
@@ -133,35 +130,31 @@ export async function toggleSerial() {
         
         isSerialConnected.value = true;
         serialLog.value += "[Verbunden]\n";
-        
-        // Leseschleife starten
         readSerialLoop();
 
     } catch (e) {
         console.error(e);
         serialLog.value += `Fehler: ${e.message}\n`;
-        await closeSerial(); 
+        await closeSerial();
     }
 }
 
 async function closeSerial() {
-    // A. Reader stoppen
     if (reader) {
         try {
-            await reader.cancel(); // Das beendet die Schleife in readSerialLoop
-            // WICHTIG: Wir müssen warten, bis der Pipe-Stream wirklich zu ist!
+            await reader.cancel();
+            // WICHTIG: Warten auf das Ende des Streams
             if (readableStreamClosed) {
-                await readableStreamClosed.catch(() => {}); 
+                await readableStreamClosed.catch(() => {});
             }
         } catch (e) { console.warn(e); }
         reader = null;
     }
 
-    // B. Port schließen (geht nur, wenn Reader Lock weg ist)
     if (port) {
         try {
             await port.close();
-        } catch (e) { console.warn("Port close error:", e); }
+        } catch (e) { console.warn(e); }
         port = null;
     }
     
@@ -170,19 +163,14 @@ async function closeSerial() {
 
 async function readSerialLoop() {
     const textDecoder = new TextDecoderStream();
-    // Promise speichern, auf das wir beim Schließen warten müssen
     readableStreamClosed = port.readable.pipeTo(textDecoder.writable);
     reader = textDecoder.readable.getReader();
-    
     let buffer = "";
 
     try {
         while (true) {
             const { value, done } = await reader.read();
-            if (done) {
-                // Stream wurde durch reader.cancel() beendet
-                break; 
-            }
+            if (done) break; // Stream geschlossen via cancel
             if (value) {
                 serialLog.value += value;
                 buffer += value;
@@ -192,18 +180,16 @@ async function readSerialLoop() {
             }
         }
     } catch (e) {
-        console.error("Read Loop Error:", e);
-        serialLog.value += `\n[Verbindungsabbruch]\n`;
+        console.error("Read loop error:", e);
+        serialLog.value += `\n[Verbindung unterbrochen]\n`;
         isSerialConnected.value = false;
     } finally {
-        // WICHTIG: Lock freigeben, sonst blockiert port.close() für immer
-        if (reader) {
-            reader.releaseLock();
-        }
+        // Lock freigeben damit port.close() geht
+        if (reader) reader.releaseLock();
     }
 }
 
-// --- SERIAL PARSER & COMMANDS ---
+// --- COMMANDS & PARSING ---
 
 export async function startConfigScan() {
     if (!isSerialConnected.value) { alert("Bitte erst verbinden!"); return; }
@@ -264,8 +250,6 @@ export async function sendSerial(text) {
 export async function jumpToBootloader() {
     if (isSerialConnected.value && port) {
         await sendSerial("B01");
-        // Wir müssen hier nicht manuell schließen, der Stick startet neu 
-        // und der Loop wirft einen Error -> Clean close passiert dort.
         return;
     }
     try {
@@ -282,18 +266,15 @@ export async function jumpToBootloader() {
 async function connectDFU() {
     let devices = await navigator.usb.getDevices();
     let device = devices.find(d => d.vendorId === VENDOR_ATMEL && d.productId === PID_DFU_MODE);
-    
     if (!device) {
         try {
             device = await navigator.usb.requestDevice({ filters: [{ vendorId: VENDOR_ATMEL }] });
         } catch (e) { throw new Error("Kein Gerät ausgewählt."); }
     }
-    
     if (device.productId === PID_APP_MODE) { 
         isWrongMode.value = true; 
         throw new Error("App-Mode. Bitte erst in Bootloader wechseln."); 
     }
-    
     if (!device.opened) await device.open();
     if (device.configuration === null) await device.selectConfiguration(1);
     try { await device.claimInterface(0); } catch(e){}
@@ -368,6 +349,7 @@ function loadHex(text) {
     return data;
 }
 
+// EXPERT FUNCTIONS
 export async function selectDevice() { 
     try{ 
         target = await connectDFU(); 
