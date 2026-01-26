@@ -10,14 +10,10 @@
             --danger: #ff3b30; --warning: #ff9500; --success: #34c759; --border: #d2d2d7;
             --term-bg: #1e1e1e; --term-text: #00ff41; --info-bg: #e8f0fe; --info-text: #174ea6;
         }
-        
-        /* v-cloak versteckt die App bis Vue fertig ist */
         [v-cloak] { display: none !important; }
-
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background-color: var(--bg); color: var(--text); padding: 20px; display: flex; flex-direction: column; align-items: center; margin: 0; min-height: 100vh; }
         .container { max-width: 1200px; width: 100%; position: relative; }
         
-        /* HEADER LOGO & INFO */
         .app-header { text-align: center; margin-bottom: 30px; position: relative; }
         .logo-img { max-width: 100%; height: auto; display: inline-block; }
         .app-subtitle { font-size: 16px; color: #86868b; margin-top: 5px; font-weight: 400; letter-spacing: 0.5px; }
@@ -76,27 +72,16 @@
         .modal-cancel { background: #e5e5ea; color: #333; }
         .modal-confirm { background: var(--danger); color: white; }
         
-        /* Markdown Content */
         .markdown-content { overflow-y: auto; padding-right: 10px; margin-bottom: 20px; font-size: 14px; line-height: 1.6; color: #333; }
         .markdown-content h1, .markdown-content h2 { color: var(--text); border-bottom: 1px solid #eee; padding-bottom: 5px; margin-top: 20px; }
         .markdown-content a { color: var(--primary); }
         .markdown-content code { background: #f0f0f5; padding: 2px 4px; border-radius: 4px; font-family: monospace; }
         .markdown-content pre { background: #f0f0f5; padding: 10px; border-radius: 8px; overflow-x: auto; }
 
-        /* --- BROWSER WARNING STYLES --- */
-        #unsupported-browser {
-            display: none; /* JS will enable this */
-            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-            background: #fff; z-index: 9999;
-            text-align: center; padding-top: 10vh;
-        }
+        #unsupported-browser { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: #fff; z-index: 9999; text-align: center; padding-top: 10vh; }
         .warning-container { max-width: 500px; margin: 0 auto; padding: 40px; }
         .warning-icon { font-size: 60px; margin-bottom: 20px; display: block; }
-        .browser-link { 
-            display: inline-block; margin-top: 20px; padding: 12px 24px; 
-            background: #007aff; color: white; text-decoration: none; 
-            border-radius: 8px; font-weight: 600; 
-        }
+        .browser-link { display: inline-block; margin-top: 20px; padding: 12px 24px; background: #007aff; color: white; text-decoration: none; border-radius: 8px; font-weight: 600; }
     </style>
 </head>
 <body>
@@ -108,13 +93,13 @@
             <p style="color: #555; line-height: 1.6;">
                 Dieses Tool benötigt direkten Hardware-Zugriff via <strong>WebUSB</strong> und <strong>Web Serial</strong>.
                 <br><br>
-                Ihr Browser (wahrscheinlich Safari oder Firefox) unterstützt diese Technologien nicht.
+                Ihr Browser (Safari/Firefox) unterstützt diese Technologien nicht.
             </p>
             <hr style="border: 0; border-top: 1px solid #eee; margin: 30px 0;">
             <p style="font-weight: 600;">Bitte nutzen Sie:</p>
             <div style="display: flex; justify-content: center; gap: 15px;">
-                <a href="https://www.google.com/chrome/" class="browser-link" style="background:#4285F4">Google Chrome</a>
-                <a href="https://www.microsoft.com/edge" class="browser-link" style="background:#0078D7">Microsoft Edge</a>
+                <a href="https://www.google.com/chrome/" class="browser-link" style="background:#4285F4">Chrome</a>
+                <a href="https://www.microsoft.com/edge" class="browser-link" style="background:#0078D7">Edge</a>
             </div>
         </div>
     </div>
@@ -124,20 +109,13 @@
     </script>
 
     <script>
-        // Check for WebUSB or WebSerial support
-        const hasUSB = 'usb' in navigator;
-        const hasSerial = 'serial' in navigator;
-        
-        // Wenn beides fehlt (Safari/Firefox), Warning zeigen
-        if (!hasUSB && !hasSerial) {
+        if (!('usb' in navigator) && !('serial' in navigator)) {
             document.getElementById('unsupported-browser').style.display = 'block';
-            // Stop Vue execution by not loading the app div content or just hiding it
             document.write('<style>#app { display: none !important; }</style>');
         }
     </script>
 
     <div class="container" id="app" v-cloak>
-        
         <header class="app-header">
             <img src="busware.png" alt="busware.de" class="logo-img" width="314" height="50">
             <div class="app-subtitle">CUL Service Tool</div>
@@ -188,6 +166,7 @@
                 <div style="margin-top: 15px; display: grid; gap: 10px; grid-template-columns: 1fr;">
                     <button class="cmd-btn" @click="selectDevice">Manuell verbinden (Test)</button>
                     <button class="cmd-btn" @click="eraseChip">Chip Erase (Löschen)</button>
+                    <button class="cmd-btn" @click="startApp">Start App / Reset</button>
                 </div>
                 <input type="file" id="hexInput" accept=".hex" style="display:none" @change="handleFileUpload" />
             </details>
@@ -266,7 +245,6 @@
         import * as FlashOnWeb from './FlashOnWeb.js'
         import { marked } from 'https://cdn.jsdelivr.net/npm/marked/lib/marked.esm.js';
 
-        // Check if supported before starting Vue
         if ('usb' in navigator || 'serial' in navigator) {
             FlashOnWeb.init();
 
@@ -274,13 +252,9 @@
               setup() {
                 const currentTab = ref('update');
                 const serialInput = ref('');
-                
-                // Confirm Modal
                 const showModal = ref(false);
                 const modalText = ref('');
                 const pendingCmd = ref('');
-
-                // Readme Modal
                 const showReadme = ref(false);
                 const parsedReadme = computed(() => {
                     return FlashOnWeb.readmeText.value ? marked.parse(FlashOnWeb.readmeText.value) : "Lade...";

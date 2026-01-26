@@ -18,17 +18,18 @@ export const isWrongMode = ref(false);
 
 export const isSerialConnected = ref(false);
 export const serialLog = ref("Terminal bereit.\n");
-export const readmeText = ref(""); // NEU: Readme Inhalt
+export const readmeText = ref("");
 
 export const deviceInfo = reactive({
     fwName: "", hwType: "", freq: "", bw: "", mod: "", power: "", rxState: "", rawRegs: []
 });
 
+// Internals
 let firmwareUrl = "";
-let target = null;
-let port = null;
+let target = null; // WebUSB
+let port = null;   // WebSerial
 let reader = null;
-let keepReading = false;
+let readableStreamClosed = null; // WICHTIG für sauberes Trennen
 let configScanActive = false;
 
 // --- INIT ---
@@ -37,50 +38,41 @@ export function init() {
     startUSBMonitoring();
 }
 
-// --- HELPER: Readme laden ---
+// --- HELPER: Readme ---
 export async function fetchReadme() {
-    if (readmeText.value) return; // Schon geladen
+    if (readmeText.value) return;
     try {
         const response = await fetch('./README.md');
         if (!response.ok) throw new Error("README.md nicht gefunden.");
         readmeText.value = await response.text();
     } catch (e) {
-        console.error(e);
         readmeText.value = "# Fehler\nKonnte Anleitung nicht laden.";
     }
 }
 
-// --- 1. FIRMWARE & MANIFEST FETCH ---
+// --- 1. FIRMWARE & MANIFEST ---
 async function fetchLatestVersion() {
     isError.value = false;
     message.value = "Lade Manifest..."; 
-    
     try {
         const baseUrl = 'https://raw.githubusercontent.com/tostmann/a-culfw/master/binaries/';
         const manifestUrl = baseUrl + 'manifest.json';
-        
         const response = await fetch(manifestUrl);
-        if (!response.ok) throw new Error(`Manifest nicht gefunden (HTTP ${response.status})`);
-        
+        if (!response.ok) throw new Error(`Manifest nicht gefunden`);
         const data = await response.json();
         
-        // CUL_V3 Eintrag suchen
         const deviceData = data["CUL_V3"];
         if (!deviceData) throw new Error("CUL_V3 nicht im Manifest");
 
         const ver = deviceData.version;
         const filename = deviceData.artifacts?.[0]?.file;
-
-        if (!filename) throw new Error("Keine Firmware-Datei im Manifest");
+        if (!filename) throw new Error("Keine Firmware-Datei");
 
         latestVersion.value = ver;
         releaseDate.value = deviceData.last_build;
         firmwareUrl = baseUrl + filename;
 
-        if (message.value === "Lade Manifest...") {
-            message.value = `Firmware ${ver} bereit.`;
-        }
-
+        if (message.value === "Lade Manifest...") message.value = `Firmware ${ver} bereit.`;
     } catch (e) {
         console.error(e);
         message.value = "Fehler beim Laden der Versionsinfos.";
@@ -89,6 +81,7 @@ async function fetchLatestVersion() {
     }
 }
 
+// --- USB MONITORING ---
 function startUSBMonitoring() {
     if (!navigator.usb) return;
     navigator.usb.getDevices().then(devices => handleDevicesFound(devices));
@@ -115,48 +108,81 @@ function analyzeDevice(device) {
     }
 }
 
-// --- 2. SERIAL TERMINAL ---
+// --- 2. SERIAL TERMINAL (ROBUST LOCK HANDLING) ---
+
 export async function toggleSerial() {
+    // 1. TRENNEN
     if (isSerialConnected.value) {
-        keepReading = false;
-        if (reader) { try { await reader.cancel(); } catch(e){} reader = null; }
-        if (port) { try { await port.close(); } catch(e){} port = null; }
-        isSerialConnected.value = false;
+        await closeSerial();
         serialLog.value += "\n[Getrennt]\n";
         return;
     }
+
+    // 2. VERBINDEN
     if (!navigator.serial) {
         serialLog.value += "Browser unterstützt kein Web Serial API.\n";
         return;
     }
+
     try {
+        // Sicherstellen, dass alles zu ist
+        if (port) await closeSerial();
+
         port = await navigator.serial.requestPort({ filters: [{ usbVendorId: VENDOR_ATMEL }] });
         await port.open({ baudRate: 38400 });
+        
         isSerialConnected.value = true;
         serialLog.value += "[Verbunden]\n";
+        
+        // Leseschleife starten
         readSerialLoop();
+
     } catch (e) {
+        console.error(e);
         serialLog.value += `Fehler: ${e.message}\n`;
+        await closeSerial(); 
     }
 }
 
-export async function startConfigScan() {
-    if (!isSerialConnected.value) { alert("Bitte erst verbinden!"); return; }
-    deviceInfo.rawRegs = []; 
-    configScanActive = true; 
-    await sendSerial("V");
+async function closeSerial() {
+    // A. Reader stoppen
+    if (reader) {
+        try {
+            await reader.cancel(); // Das beendet die Schleife in readSerialLoop
+            // WICHTIG: Wir müssen warten, bis der Pipe-Stream wirklich zu ist!
+            if (readableStreamClosed) {
+                await readableStreamClosed.catch(() => {}); 
+            }
+        } catch (e) { console.warn(e); }
+        reader = null;
+    }
+
+    // B. Port schließen (geht nur, wenn Reader Lock weg ist)
+    if (port) {
+        try {
+            await port.close();
+        } catch (e) { console.warn("Port close error:", e); }
+        port = null;
+    }
+    
+    isSerialConnected.value = false;
 }
 
 async function readSerialLoop() {
-    keepReading = true;
     const textDecoder = new TextDecoderStream();
-    const readableStreamClosed = port.readable.pipeTo(textDecoder.writable);
+    // Promise speichern, auf das wir beim Schließen warten müssen
+    readableStreamClosed = port.readable.pipeTo(textDecoder.writable);
     reader = textDecoder.readable.getReader();
+    
     let buffer = "";
+
     try {
-        while (keepReading) {
+        while (true) {
             const { value, done } = await reader.read();
-            if (done) break;
+            if (done) {
+                // Stream wurde durch reader.cancel() beendet
+                break; 
+            }
             if (value) {
                 serialLog.value += value;
                 buffer += value;
@@ -166,10 +192,24 @@ async function readSerialLoop() {
             }
         }
     } catch (e) {
-        serialLog.value += `\n[Verbindung unterbrochen]\n`;
-    } finally {
+        console.error("Read Loop Error:", e);
+        serialLog.value += `\n[Verbindungsabbruch]\n`;
         isSerialConnected.value = false;
+    } finally {
+        // WICHTIG: Lock freigeben, sonst blockiert port.close() für immer
+        if (reader) {
+            reader.releaseLock();
+        }
     }
+}
+
+// --- SERIAL PARSER & COMMANDS ---
+
+export async function startConfigScan() {
+    if (!isSerialConnected.value) { alert("Bitte erst verbinden!"); return; }
+    deviceInfo.rawRegs = []; 
+    configScanActive = true; 
+    await sendSerial("V");
 }
 
 function parseSerialLine(line) {
@@ -216,14 +256,16 @@ function decodeCC1101(regs) {
 export async function sendSerial(text) {
     if (!port || !port.writable) return;
     const writer = port.writable.getWriter();
-    serialLog.value += `> ${text}\n`;
     await writer.write(new TextEncoder().encode(text + "\r\n"));
     writer.releaseLock();
+    serialLog.value += `> ${text}\n`;
 }
 
 export async function jumpToBootloader() {
     if (isSerialConnected.value && port) {
         await sendSerial("B01");
+        // Wir müssen hier nicht manuell schließen, der Stick startet neu 
+        // und der Loop wirft einen Error -> Clean close passiert dort.
         return;
     }
     try {
@@ -244,14 +286,12 @@ async function connectDFU() {
     if (!device) {
         try {
             device = await navigator.usb.requestDevice({ filters: [{ vendorId: VENDOR_ATMEL }] });
-        } catch (e) {
-            throw new Error("Kein Gerät ausgewählt.");
-        }
+        } catch (e) { throw new Error("Kein Gerät ausgewählt."); }
     }
     
     if (device.productId === PID_APP_MODE) { 
         isWrongMode.value = true; 
-        throw new Error("Falscher Modus (App-Mode). Bitte erst in Bootloader wechseln."); 
+        throw new Error("App-Mode. Bitte erst in Bootloader wechseln."); 
     }
     
     if (!device.opened) await device.open();
@@ -276,7 +316,6 @@ async function runFlashSequence(hexData) {
     
     message.value = "Starte CUL neu...";
     await AtmelDFU.launch(target);
-    
     isSuccess.value = true; message.value = "Update erfolgreich abgeschlossen!";
 }
 
@@ -329,5 +368,33 @@ function loadHex(text) {
     return data;
 }
 
-export async function selectDevice() { try{ target = await connectDFU(); message.value="Verbunden"; }catch(e){message.value=e.message;} }
-export async function eraseChip() { if(target) AtmelDFU.chipErase(target); }
+export async function selectDevice() { 
+    try{ 
+        target = await connectDFU(); 
+        message.value="Verbunden (DFU Mode)"; 
+    } catch(e){
+        message.value=e.message;
+    } 
+}
+
+export async function eraseChip() { 
+    try {
+        if(!target) target = await connectDFU();
+        await AtmelDFU.chipErase(target); 
+        message.value = "Chip vollständig gelöscht.";
+    } catch(e) {
+        message.value = "Fehler: " + e.message;
+    }
+}
+
+export async function startApp() {
+    try {
+        if(!target) target = await connectDFU();
+        message.value = "Sende Start-Kommando...";
+        await AtmelDFU.launch(target);
+        message.value = "Anwendung gestartet (Bootloader verlassen).";
+        try{await target.close();}catch(e){} target=null;
+    } catch(e) {
+        message.value = "Fehler: " + e.message;
+    }
+}
