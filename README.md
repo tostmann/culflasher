@@ -1,31 +1,69 @@
-# Flash tool on Web for AVR
-You can program AVR in web browser at: https://tmk.github.io/AVRFlashOnWeb/
+# busware CUL Web Flasher & Service Tool
 
-Use Chrome or Edge. WebUSB is not supported by Safari and Firefox unfortunately.
- 
-On Linux you need to install [udev rules](https://github.com/tmk/tmk_keyboard/wiki/FAQ-Build#linux-udev-rules) file to get permission.
+Ein browserbasiertes Tool zum Flashen und Konfigurieren von **busware CUL USB-Sticks**.  
+Es ermöglicht Firmware-Updates und Diagnose direkt im Browser (Chrome/Edge), ohne dass lokale Software wie `dfu-programmer` oder Terminal-Programme installiert werden müssen.
 
-On Windows you need to install WinUSB driver refering to [this instruction](https://github.com/tmk/tmk_keyboard/wiki/WinUSB-Driver), or you can just use [Zadig](https://zadig.akeo.ie/) instead.
+🔗 **Live-Tool:** [https://prov.busware.de/culflasher/](https://prov.busware.de/culflasher/)  
+🔌 **Hardware-Infos:** [busware.de CUL Wiki](https://busware.de/tiki-index.php?page=CUL)
 
-Check this also.
-https://github.com/tmk/tmk_keyboard/wiki#flash-on-web
+---
 
+## ✨ Features
 
-## Atmel USB DFU protocol
-https://ww1.microchip.com/downloads/en/DeviceDoc/doc7618.pdf
+* **1-Klick Firmware Update:** Lädt automatisch die neueste `a-culfw` Version (via `manifest.json`) direkt von GitHub und flasht den Stick.
+* **Intelligente Erkennung:** Unterscheidet automatisch zwischen **App-Mode** (Laufender Betrieb) und **Bootloader-Mode** (DFU).
+* **Integriertes Terminal:** Senden von CUL-Befehlen (z.B. `V`, `X21`, `e`) direkt im Browser über Web Serial API.
+* **Konfigurations-Decoder:** Liest die Register des CC1101-Chips aus und zeigt wichtige Parameter im Klartext an:
+    * Frequenz (kalkuliert aus Reg `0D`-`0F`)
+    * Bandbreite & Modulation
+    * Sendeleistung (PA Index)
+* **Lokaler Upload:** Möglichkeit, eigene `.hex` Dateien (z.B. Test-Firmware) zu flashen.
+* **Sicherheit:** Warnhinweise vor Aktionen, die die Verbindung trennen (Reset, Bootloader-Jump).
 
-## WebUSB
-https://developer.mozilla.org/en-US/docs/Web/API/WebUSB_API
+---
 
-## Supported controllers
-This supports AVR microcontrollers with Atmel USB DFU bootloader.
-- at90usb128x
-- at90usb64x
-- at90usb162
-- at90usb82
-- atmega32u6
-- atmega32u4
-- atmega32u2
-- atmega16u4
-- atmega16u2
-- atmega8u2
+## 🚀 Nutzung
+
+Das Tool läuft vollständig clientseitig im Browser. Es werden keine Daten an Server gesendet (außer dem Download der Firmware von GitHub).
+
+### Voraussetzungen
+* **Browser:** Google Chrome, Microsoft Edge oder Opera (Browser muss **WebUSB** und **Web Serial** unterstützen).
+* **Verbindung:** Der Stick muss direkt am PC angeschlossen sein.
+
+### Anleitung für Windows-Nutzer
+Windows installiert für den Bootloader oft den falschen Treiber. Damit der Browser Zugriff erhält, muss **einmalig** der Treiber gewechselt werden:
+1.  Stick mit gedrücktem Taster einstecken (Bootloader-Modus).
+2.  Lade [Zadig](https://zadig.akeo.ie/) herunter und starte es.
+3.  Wähle `Options` -> `List All Devices`.
+4.  Wähle das Gerät `ATm32U4DFU`.
+5.  Ändere den Treiber auf **WinUSB** und klicke "Replace Driver".
+
+Unter **macOS** und **Linux** funktioniert es in der Regel "Out of the Box" (unter Linux sind ggf. udev-Regeln nötig).
+
+---
+
+## 🛠 Funktionsweise
+
+Das Tool besteht aus zwei Hauptkomponenten:
+
+1.  **Flasher (WebUSB):**
+    Basiert auf dem DFU-Protokoll für Atmel AVR Chips. Der Browser kommuniziert direkt mit dem Bootloader des ATmega32U4.
+    * *Quelle:* Die Firmware wird live via `fetch` vom `a-culfw` GitHub-Repository geladen.
+
+2.  **Terminal (Web Serial API):**
+    Baut eine serielle Verbindung (`/dev/ttyACM0` bzw. `COMx`) zum Stick auf, wenn dieser im App-Modus ist.
+    * Es parst die Antworten des Sticks live, um Version und CC1101-Registerwerte zu extrahieren und in der GUI anzuzeigen.
+
+---
+
+## 🏗 Credits & Lizenz
+
+Dieses Projekt ist ein Fork und eine spezialisierte Weiterentwicklung von **AVRFlashOnWeb**.
+
+* **Original-Projekt:** [AVRFlashOnWeb](https://github.com/tmk/AVRFlashOnWeb) von [tmk](https://github.com/tmk).
+* **Anpassungen:** * Benutzeroberfläche komplett überarbeitet (Tabs, Dashboard).
+    * Integration der GitHub API zum automatischen Laden von CUL-Firmware.
+    * Hinzufügen eines seriellen Terminals und CC1101-Decoders.
+    * Spezifische Anpassungen für den ATmega32U4 auf CUL-Hardware.
+
+Der Quellcode steht unter der **MIT License**.

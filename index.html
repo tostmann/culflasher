@@ -1,84 +1,308 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="de">
 <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>busware CUL Tool</title>
+    <style>
+        :root {
+            --primary: #007aff; --bg: #f5f5f7; --card-bg: #ffffff; --text: #1d1d1f;
+            --danger: #ff3b30; --warning: #ff9500; --success: #34c759; --border: #d2d2d7;
+            --term-bg: #1e1e1e; --term-text: #00ff41; --info-bg: #e8f0fe; --info-text: #174ea6;
+        }
+        
+        /* WICHTIG: Verhindert das Aufblitzen vor dem Vue-Start */
+        [v-cloak] { display: none !important; }
+
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background-color: var(--bg); color: var(--text); padding: 20px; display: flex; flex-direction: column; align-items: center; }
+        .container { max-width: 1200px; width: 100%; position: relative; }
+        
+        /* HEADER LOGO & INFO */
+        .app-header { text-align: center; margin-bottom: 30px; position: relative; }
+        .logo-img { max-width: 100%; height: auto; display: inline-block; }
+        .app-subtitle { font-size: 16px; color: #86868b; margin-top: 5px; font-weight: 400; letter-spacing: 0.5px; }
+        
+        .info-btn {
+            position: absolute; right: 0; top: 10px;
+            width: 32px; height: 32px; border-radius: 50%;
+            background: #e5e5ea; color: var(--primary);
+            border: none; font-weight: bold; font-size: 18px; font-family: serif;
+            cursor: pointer; display: flex; align-items: center; justify-content: center;
+            transition: background 0.2s;
+        }
+        .info-btn:hover { background: #d1d1d6; }
+
+        .tabs { display: flex; background: #e5e5ea; border-radius: 10px; padding: 4px; margin-bottom: 20px; max-width: 600px; margin-left: auto; margin-right: auto; }
+        .tab-btn { flex: 1; padding: 10px; border: none; background: transparent; border-radius: 8px; cursor: pointer; font-weight: 600; color: #666; transition: all 0.2s; }
+        .tab-btn.active { background: white; color: var(--primary); box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+        .card { background: var(--card-bg); border-radius: 16px; box-shadow: 0 10px 25px rgba(0,0,0,0.05); padding: 30px; text-align: center; height: 100%; }
+
+        .config-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 15px; margin-bottom: 20px; text-align: left; }
+        .config-box { background: var(--info-bg); color: var(--info-text); padding: 15px; border-radius: 12px; border: 1px solid #d2e3fc; }
+        .config-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; opacity: 0.7; margin-bottom: 5px; }
+        .config-value { font-size: 16px; font-weight: 700; font-family: monospace; }
+        
+        .terminal-window { background-color: var(--term-bg); color: var(--term-text); font-family: "SF Mono", "Monaco", monospace; font-size: 13px; border-radius: 8px; height: 400px; overflow-y: auto; padding: 15px; text-align: left; margin-bottom: 15px; white-space: pre-wrap; box-shadow: inset 0 0 10px rgba(0,0,0,0.5); }
+        .cmd-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 15px; }
+        .cmd-btn { background: #f0f0f5; border: 1px solid #d1d1d6; border-radius: 8px; padding: 12px; font-weight: 600; color: #333; cursor: pointer; font-size: 14px; }
+        .cmd-btn:hover { background: #e5e5ea; }
+        .cmd-btn.highlight { background: #e8f0fe; color: var(--primary); border-color: #d2e3fc; }
+        .cmd-btn.danger { color: var(--danger); border-color: #ffcccc; background: #fff5f5; }
+        .cmd-btn.danger:hover { background: #ffe6e6; }
+        .cmd-btn.file-upload { border: 1px dashed var(--primary); color: var(--primary); background: #fff; }
+        .cmd-btn.file-upload:hover { background: #f0f8ff; }
+
+        .input-group { display: flex; gap: 10px; }
+        .term-input { flex: 1; padding: 12px; border-radius: 8px; border: 1px solid var(--border); font-family: monospace; font-size: 16px; }
+        .connect-btn { background-color: var(--success); color: white; border: none; padding: 10px 20px; border-radius: 8px; cursor: pointer; font-weight: 600; }
+        .connect-btn.connected { background-color: var(--danger); }
+        
+        .wrong-mode-box { background-color: #fff8e6; border: 2px solid var(--warning); border-radius: 12px; padding: 20px; margin-bottom: 25px; text-align: left; color: #5c3b00; }
+        .serial-btn { margin-top: 15px; width: 100%; padding: 10px; background-color: var(--warning); color: white; border: none; border-radius: 8px; font-weight: 600; cursor: pointer; }
+        .version-header { margin-bottom: 25px; min-height: 80px; display: flex; flex-direction: column; justify-content: center; align-items: center;}
+        .version-tag { font-size: 28px; font-weight: 700; color: var(--primary); display: block; margin-bottom: 5px; }
+        .version-meta { font-size: 14px; color: #86868b; }
+        button.primary-btn { width: 100%; padding: 16px; background-color: var(--primary); color: white; border: none; border-radius: 12px; font-size: 17px; font-weight: 600; cursor: pointer; }
+        button.primary-btn:disabled { background-color: #d2d2d7; }
+        
+        .status-area { margin-top: 25px; padding: 15px; background: #f9f9f9; border-radius: 8px; font-family: monospace; font-size: 13px; color: #555; text-align: left; border: 1px solid #eee; word-break: break-all; }
+        .status-area.error { color: var(--danger); background: #fff0f0; border-color: #ffcccc; }
+        .status-area.success { color: var(--success); border-color: var(--success); }
+        .spinner { display: inline-block; width: 24px; height: 24px; border: 3px solid rgba(0,122,255,0.3); border-radius: 50%; border-top-color: var(--primary); animation: spin 1s ease-in-out infinite; margin-bottom: 10px; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        details { margin-top: 30px; color: #86868b; font-size: 14px; cursor: pointer; }
+
+        /* MODAL STYLES */
+        .modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); backdrop-filter: blur(4px); display: flex; justify-content: center; align-items: center; z-index: 1000; }
+        .modal { background: white; padding: 25px; border-radius: 16px; width: 90%; max-width: 400px; box-shadow: 0 20px 40px rgba(0,0,0,0.2); text-align: center; display: flex; flex-direction: column; }
+        .modal.large { max-width: 800px; height: 80%; text-align: left; }
+        
+        .modal h3 { margin-top: 0; color: var(--danger); }
+        .modal p { color: #555; line-height: 1.5; margin-bottom: 25px; }
+        .modal-actions { display: flex; gap: 10px; justify-content: center; margin-top: auto; }
+        .modal-btn { flex: 1; padding: 12px; border-radius: 8px; border: none; font-weight: 600; cursor: pointer; }
+        .modal-cancel { background: #e5e5ea; color: #333; }
+        .modal-confirm { background: var(--danger); color: white; }
+        
+        /* Markdown Content */
+        .markdown-content { overflow-y: auto; padding-right: 10px; margin-bottom: 20px; font-size: 14px; line-height: 1.6; color: #333; }
+        .markdown-content h1, .markdown-content h2 { color: var(--text); border-bottom: 1px solid #eee; padding-bottom: 5px; margin-top: 20px; }
+        .markdown-content a { color: var(--primary); }
+        .markdown-content code { background: #f0f0f5; padding: 2px 4px; border-radius: 4px; font-family: monospace; }
+        .markdown-content pre { background: #f0f0f5; padding: 10px; border-radius: 8px; overflow-x: auto; }
+    </style>
 </head>
 <body>
     <script type="importmap">
-        {
-            "imports": {
-                "vue": "https://unpkg.com/vue@3/dist/vue.esm-browser.js"
-            }
-        }
+        { "imports": { "vue": "https://unpkg.com/vue@3/dist/vue.esm-browser.js" } }
     </script>
 
-    <h1>Flash on Web for AVR USB DFU</h1>
+    <div class="container" id="app" v-cloak>
+        
+        <header class="app-header">
+            <img src="busware.png" alt="busware.de" class="logo-img" width="314" height="50">
+            <div class="app-subtitle">CUL Service Tool</div>
+            <button class="info-btn" @click="showReadmeModal">ℹ</button>
+        </header>
 
-    <div id="app">
-      Message: {{ FlashOnWeb.message }}
-      <h3>
-        <button @click="FlashOnWeb.programFlash">Flash on Web</button>
-        <input type="file" ref="hex-file" id="hexFile" name="hexFile" accept=".hex" />
-      </h3>
+        <div class="tabs">
+            <button class="tab-btn" :class="{ active: currentTab === 'update' }" @click="currentTab = 'update'">
+                Firmware Update
+            </button>
+            <button class="tab-btn" :class="{ active: currentTab === 'terminal' }" @click="currentTab = 'terminal'">
+                Terminal & Config
+            </button>
+        </div>
 
-      More Operations: <button @click="moreOp = !moreOp" id="toggle">&#9660;</button>
-      <div id="more" v-show="moreOp" style="display:none">
-        Device: {{ FlashOnWeb.device }}
-        <h3>
-          <button @click="FlashOnWeb.selectDevice">Select Device</button>
-        </h3>
-        <h3>
-          <button @click="FlashOnWeb.eraseChip">Erase Chip</button>
-          <button @click="FlashOnWeb.checkBlank">Check Blank</button>
-        </h3>
-        <h3>
-          <button @click="FlashOnWeb.writeFlash">Write Flash</button>
-          <input type="file" id="flashFile" accept=".hex" />
-        </h3>
-        <h3>
-          <button @click="FlashOnWeb.readFlash">Read Flash</button>
-          <button id="flash-download" disabled>Download File</button>
-          <a id="flash-link" style="display:none">Download File</a>
-        </h3>
-    
-        <h3>
-          <button @click="FlashOnWeb.clearEEPROM">Clear EEPROM</button>
-        </h3>
-        <h3>
-          <button @click="FlashOnWeb.writeEEPROM">Write EEPROM</button>
-          <input type="file" id="eepromFile" accept=".hex" />
-        </h3>
-        <h3>
-          <button @click="FlashOnWeb.readEEPROM">Read EEPROM</button>
-          <button id="eeprom-download" disabled>Download File</button>
-          <a id="eeprom-link" style="display:none">Download File</a>
-        </h3>
-    
-        <h3>
-          <button @click="FlashOnWeb.startApp">Start App</button>
-          <button @click="FlashOnWeb.recoverError">Recover Error</button>
-        </h3>
-    
-        <h3>
-          <button @click="FlashOnWeb.checkStatus">Check Status</button>
-        </h3>
-          Status: {{ FlashOnWeb.status }}
-      </div>
+        <div class="card" v-if="currentTab === 'update'">
+            <div v-if="isWrongMode" class="wrong-mode-box">
+                <div style="font-weight:700; margin-bottom:10px;">⚠️ Falscher Modus erkannt</div>
+                <p style="margin:0 0 10px 0; font-size:14px;">Stick im App-Mode. Update benötigt Bootloader.</p>
+                <button class="serial-btn" @click="askConfirm('B01')">In Bootloader neustarten (B01)</button>
+            </div>
+
+            <div class="version-header" v-if="!isWrongMode">
+                <div v-if="!latestVersion">
+                    <div class="spinner"></div>
+                    <span class="version-meta">Lade Versionsinfos...</span>
+                </div>
+                <div v-else>
+                    <span class="version-meta">Neuestes a-culfw Release verfügbar</span>
+                    <span class="version-tag">{{ latestVersion }}</span>
+                    <span class="version-meta">{{ releaseDate }}</span>
+                </div>
+            </div>
+
+            <button class="primary-btn" @click="programFlash" :disabled="!latestVersion || isFlashing">
+                <span v-if="isFlashing">Update läuft...</span>
+                <span v-else>Update starten</span>
+            </button>
+            
+            <button class="cmd-btn file-upload" style="margin-top: 15px; width: 100%;" @click="triggerFileSelect">oder eigene .hex Datei laden...</button>
+
+            <div class="status-area" :class="{ error: isError, success: isSuccess }">
+                &gt; {{ message }}
+            </div>
+            
+            <details>
+                <summary>Experten-Optionen</summary>
+                <div style="margin-top: 15px; display: grid; gap: 10px; grid-template-columns: 1fr;">
+                    <button class="cmd-btn" @click="selectDevice">Manuell verbinden (Test)</button>
+                    <button class="cmd-btn" @click="eraseChip">Chip Erase (Löschen)</button>
+                </div>
+                <input type="file" id="hexInput" accept=".hex" style="display:none" @change="handleFileUpload" />
+            </details>
+        </div>
+
+        <div class="card" v-if="currentTab === 'terminal'">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
+                <div style="font-weight:600; color:#555;">Serielle Konsole</div>
+                <button class="connect-btn" :class="{ connected: isSerialConnected }" @click="toggleSerial">
+                    {{ isSerialConnected ? 'Trennen' : 'Verbinden' }}
+                </button>
+            </div>
+
+            <div class="config-grid" v-if="deviceInfo.hwType || deviceInfo.freq">
+                <div class="config-box">
+                    <div class="config-label">Hardware</div>
+                    <div class="config-value">{{ deviceInfo.hwType || '---' }}</div>
+                    <div style="font-size:12px; color:#666; margin-top:2px;">{{ deviceInfo.fwName }}</div>
+                </div>
+                <div class="config-box">
+                    <div class="config-label">Frequenz</div>
+                    <div class="config-value">{{ deviceInfo.freq || '---' }}</div>
+                </div>
+                <div class="config-box">
+                    <div class="config-label">Bandbreite</div>
+                    <div class="config-value">{{ deviceInfo.bw || '---' }}</div>
+                </div>
+                <div class="config-box">
+                    <div class="config-label">Modulation</div>
+                    <div class="config-value">{{ deviceInfo.mod || '---' }}</div>
+                </div>
+                <div class="config-box">
+                    <div class="config-label">Power & RX</div>
+                    <div class="config-value" style="font-size:14px;">{{ deviceInfo.power || '--' }}</div>
+                    <div style="font-size:11px; color:#666;">{{ deviceInfo.rxState }}</div>
+                </div>
+            </div>
+            
+            <div class="cmd-grid">
+                <button class="cmd-btn highlight" @click="startConfigScan">Scan Config</button>
+                <button class="cmd-btn" @click="sendSerial('X21')">Debug (X21)</button>
+                <button class="cmd-btn danger" @click="askConfirm('e')">Reset (e)</button>
+                <button class="cmd-btn danger" @click="askConfirm('B01')">Bootloader (B01)</button>
+            </div>
+
+            <div class="terminal-window" id="termWin">{{ serialLog }}</div>
+
+            <div class="input-group">
+                <input type="text" class="term-input" v-model="serialInput" @keyup.enter="triggerSend" placeholder="Befehl...">
+                <button class="cmd-btn highlight" style="width:100px;" @click="triggerSend">Senden</button>
+            </div>
+        </div>
+
+        <div class="modal-overlay" v-if="showModal">
+            <div class="modal">
+                <h3>Warnung</h3>
+                <p v-html="modalText"></p>
+                <div class="modal-actions">
+                    <button class="modal-btn modal-cancel" @click="showModal = false">Abbrechen</button>
+                    <button class="modal-btn modal-confirm" @click="executeConfirm">Ausführen</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="modal-overlay" v-if="showReadme">
+            <div class="modal large">
+                <button @click="showReadme = false" style="position:absolute; right:20px; top:20px; border:none; background:none; font-size:24px; cursor:pointer; color:#666;">&times;</button>
+                <div class="markdown-content" v-html="parsedReadme"></div>
+            </div>
+        </div>
+
     </div>
-    
+
     <script type="module">
-        import { createApp, ref } from 'vue'
+        import { createApp, ref, watch, nextTick, computed } from 'vue'
         import * as FlashOnWeb from './FlashOnWeb.js'
-    
-        const moreOp = ref(false);
+        import { marked } from 'https://cdn.jsdelivr.net/npm/marked/lib/marked.esm.js';
+
+        FlashOnWeb.init();
 
         createApp({
           setup() {
+            const currentTab = ref('update');
+            const serialInput = ref('');
+            
+            // Confirm Modal
+            const showModal = ref(false);
+            const modalText = ref('');
+            const pendingCmd = ref('');
+
+            // Readme Modal
+            const showReadme = ref(false);
+            const parsedReadme = computed(() => {
+                return FlashOnWeb.readmeText.value ? marked.parse(FlashOnWeb.readmeText.value) : "Lade...";
+            });
+
+            watch(FlashOnWeb.serialLog, () => {
+                nextTick(() => {
+                    const el = document.getElementById('termWin');
+                    if(el) el.scrollTop = el.scrollHeight;
+                });
+            });
+
+            const triggerSend = () => {
+                if(!serialInput.value) return;
+                FlashOnWeb.sendSerial(serialInput.value);
+                serialInput.value = '';
+            };
+
+            const askConfirm = (cmd) => {
+                pendingCmd.value = cmd;
+                if (cmd === 'e') {
+                    modalText.value = "Werkseinstellungen laden & Neustart?";
+                } else if (cmd === 'B01') {
+                    modalText.value = "In den Bootloader neustarten?<br>Verbindung wird getrennt.";
+                } else {
+                    modalText.value = "Befehl senden?";
+                }
+                showModal.value = true;
+            };
+
+            const executeConfirm = () => {
+                showModal.value = false;
+                if (pendingCmd.value === 'B01') {
+                    FlashOnWeb.jumpToBootloader();
+                } else {
+                    FlashOnWeb.sendSerial(pendingCmd.value);
+                }
+            };
+
+            const triggerFileSelect = () => {
+                document.getElementById('hexInput').click();
+            };
+            
+            const handleFileUpload = (e) => {
+                const file = e.target.files[0];
+                if(file) FlashOnWeb.uploadFirmware(file);
+                e.target.value = null; 
+            };
+
+            const showReadmeModal = () => {
+                FlashOnWeb.fetchReadme();
+                showReadme.value = true;
+            }
+
             return {
-              FlashOnWeb, moreOp
+                currentTab, serialInput, triggerSend,
+                showModal, modalText, askConfirm, executeConfirm,
+                triggerFileSelect, handleFileUpload,
+                showReadme, parsedReadme, showReadmeModal,
+                ...FlashOnWeb
             }
           }
         }).mount('#app')
     </script>
-
 </body>
 </html>

@@ -1,11 +1,9 @@
 /*
- *  Atmel DFU WebUSB
+ * Atmel DFU WebUSB
  */
 // AVR MEGA: https://ww1.microchip.com/downloads/en/DeviceDoc/doc7618.pdf
-// AVR XMEGA: https://ww1.microchip.com/downloads/en/devicedoc/doc8457.pdf
 
 // bRequest
-// DFU_DETACH, DFU_GETSTATE, DFU_ABORT is not defined on XMEGA and not used in dfu-programmer
 export const bRequest = {
     DFU_DETACH: 0,
     DFU_DNLOAD: 1,
@@ -69,10 +67,16 @@ export const deviceInfo = [
 
 export async function getAtmelDevice() {
     try {
-	let dev = await navigator.usb.requestDevice({ filters: [{ vendorId: 0x03eb /* atmel */ }] });
-	await dev.open();
-	await dev.claimInterface(0);
-	return dev;
+        let dev = await navigator.usb.requestDevice({ filters: [{ vendorId: 0x03eb /* atmel */ }] });
+        await dev.open();
+        
+        // FIX FOR MAC / CHROME STRICTNESS
+        if (dev.configuration === null) {
+            await dev.selectConfiguration(1);
+        }
+
+        await dev.claimInterface(0);
+        return dev;
     } catch (e) {
         console.log(e);
         return null;
@@ -91,14 +95,6 @@ export function parseStatus(data) {
 }
 
 export function getStatus(dev) {
-    /* USBInTransferResult
-     *    .data: GETSTATUS response(DataView)
-     *              [0]:    bStatus
-     *              [1..3]: bwPollTimeOut
-     *              [4]:    bState
-     *              [5]:    iString
-     *    .status: 'ok', 'stall', or 'babble'
-     */
     return dev.controlTransferIn(
         {
             requestType:    'class',
@@ -142,7 +138,6 @@ export function writeBlock(dev, start, end, data, eeprom = false) {
     header[5] = end & 0xff;
     header[31] = 0x00;  // bMaxPacketSize0 = 32
 
-    //const footer = new Uint8Array(16);
     const footer = [];
     footer[0] = 0x00;   // CRC
     footer[1] = 0x00;
@@ -161,7 +156,6 @@ export function writeBlock(dev, start, end, data, eeprom = false) {
     footer[14] = 0xff;  // bcdDevice
     footer[15] = 0xff;
 
-    //let msg = header.concat(footer);
     let msg = new Uint8Array(header.length + data.length + footer.length);
     msg.set(header, 0);
     msg.set(data, header.length);
@@ -194,7 +188,6 @@ export async function writeMemory(dev, start, end, data, eeprom = false) {
             result = await selectPage(dev, page);
             if (result.status != 'ok') throw new Error('selectPage failure');
             result = await getStatus(dev);
-            //console.log(`select page: ${ page }`);
         }
 
         _end = _start + TRANSFER_SIZE - 1;
@@ -206,11 +199,8 @@ export async function writeMemory(dev, start, end, data, eeprom = false) {
         }
 
         let d = data.slice(_start - start, _end - start + 1);
-        //console.log(`write: page${page} ${hexStr(_start)} ... ${hexStr(_end)}`);
         result = await writeBlock(dev, _start % PAGE_SIZE, _end % PAGE_SIZE, d, eeprom);
         if (result.status != 'ok') throw new Error('writeBlock failure');
-        //console.log('bytesWritten: ' + result.bytesWritten);
-        //console.log('status: ' + result.status);
 
         count += result.bytesWritten;
         _start = _end + 1;
@@ -266,25 +256,19 @@ export async function readMemory(dev, start, end, eeprom = false) {
             page = Math.floor(_start / PAGE_SIZE);
             result = await selectPage(dev, page);
             result = await getStatus(dev);
-            //console.log(`select page: ${ page }`);
         }
 
         _end = _start + TRANSFER_SIZE - 1;
         if (_end > end) _end = end;
 
-        // avoid stepping over page border
         if (_end > (page + 1) * PAGE_SIZE) {
             _end = (page + 1) * PAGE_SIZE;
         }
 
-        //console.log(`read: page${page} ${hexStr(_start)} ... ${hexStr(_end)}`);
         result = await readBlock(dev, _start % PAGE_SIZE, _end % PAGE_SIZE, eeprom);
         if (result.status != 'ok') {
             throw new Error(`readBlock failure at ${_start}`);
         }
-        //console.log('byteLength: ' + result.data.byteLength);
-        //console.log('status: ' + result.status);
-        //console.log(result.data.buffer);
 
         buf.set(new Uint8Array(result.data.buffer), _start - start);
         _start = _end + 1;
@@ -373,12 +357,4 @@ export function abort(dev) {
             index:          0,  // interface
         },
     );
-}
-
-function hexStr(n, digit=2, toUpper=true) {
-    let s = n.toString(16).padStart(digit, '0');
-    if (toUpper)
-        return s.toUpperCase();
-    else
-        return s;
 }

@@ -1,456 +1,333 @@
-import { ref } from "vue";
+import { ref, reactive } from "vue";
 import * as AtmelDFU from './AtmelDFU.js';
 
+// --- KONSTANTEN ---
+const VENDOR_ATMEL = 0x03eb;
+const PID_DFU_MODE = 0x2ff4; 
+const PID_APP_MODE = 0x204b; 
+const CRYSTAL_FREQ = 26000000;
 
-/*
- * Actions
- */
-let target = null; // USBDevice
-export const device = ref('Not Selected');
-export const status = ref('');
-export const message = ref('');
+// --- STATES ---
+export const message = ref('Lade...');
+export const latestVersion = ref(''); 
+export const releaseDate = ref('');
+export const isFlashing = ref(false);
+export const isError = ref(false);
+export const isSuccess = ref(false);
+export const isWrongMode = ref(false);
 
+export const isSerialConnected = ref(false);
+export const serialLog = ref("Terminal bereit.\n");
+export const readmeText = ref(""); // NEU: Readme Inhalt
 
-export async function selectDevice() {
+export const deviceInfo = reactive({
+    fwName: "", hwType: "", freq: "", bw: "", mod: "", power: "", rxState: "", rawRegs: []
+});
+
+let firmwareUrl = "";
+let target = null;
+let port = null;
+let reader = null;
+let keepReading = false;
+let configScanActive = false;
+
+// --- INIT ---
+export function init() {
+    fetchLatestVersion();
+    startUSBMonitoring();
+}
+
+// --- HELPER: Readme laden ---
+export async function fetchReadme() {
+    if (readmeText.value) return; // Schon geladen
     try {
-        // close previous device
-        if (target !== null) {
-            await target.close();
-            target = null;
-        }
-
-        target = await AtmelDFU.getAtmelDevice();
-        if (target === null) {
-            device.value = 'Not selected';
-            return;
-        }
-
-        device.value = target.productName;
-        console.log(`Selected: ${target.productName}`);
-    } catch(e) {
-        target = null;
-        device.value = 'Not selected';
-        console.log(e);
+        const response = await fetch('./README.md');
+        if (!response.ok) throw new Error("README.md nicht gefunden.");
+        readmeText.value = await response.text();
+    } catch (e) {
+        console.error(e);
+        readmeText.value = "# Fehler\nKonnte Anleitung nicht laden.";
     }
 }
 
-export async function checkStatus() {
+// --- 1. FIRMWARE & MANIFEST FETCH ---
+async function fetchLatestVersion() {
+    isError.value = false;
+    message.value = "Lade Manifest..."; 
+    
     try {
-        let result = await AtmelDFU.getStatus(target);
+        const baseUrl = 'https://raw.githubusercontent.com/tostmann/a-culfw/master/binaries/';
+        const manifestUrl = baseUrl + 'manifest.json';
+        
+        const response = await fetch(manifestUrl);
+        if (!response.ok) throw new Error(`Manifest nicht gefunden (HTTP ${response.status})`);
+        
+        const data = await response.json();
+        
+        // CUL_V3 Eintrag suchen
+        const deviceData = data["CUL_V3"];
+        if (!deviceData) throw new Error("CUL_V3 nicht im Manifest");
 
-        status.value = result.status;
-        let stat = AtmelDFU.parseStatus(result.data);
-        console.log('status: '        + result.status);
-        console.log('bStatus: '       + stat.bStatus);
-        console.log('bwPollTimeOut: ' + stat.bwPollTimeOut);
-        console.log('bState: '        + stat.bState);
-        console.log('iString: '       + stat.iString);
+        const ver = deviceData.version;
+        const filename = deviceData.artifacts?.[0]?.file;
 
-        message.value = `status: ${stat.bStatus}, state: ${stat.bState}`;
-    } catch(e) {
-        message.value = `Error: ${e.name}`;
-        device.value = 'Invalid';
-        status.value = 'error';
-        console.log(e);
-    }
-}
+        if (!filename) throw new Error("Keine Firmware-Datei im Manifest");
 
-export async function eraseChip() {
-    try {
-        message.value = 'Erasing Flash...';
-        let result = await AtmelDFU.chipErase(target);
-        status.value = result.status;
-        message.value = 'Done';
-    } catch(e) {
-        device.value = 'Invalid';
-        status.value = 'error';
-        console.log(e);
-    }
-}
+        latestVersion.value = ver;
+        releaseDate.value = deviceData.last_build;
+        firmwareUrl = baseUrl + filename;
 
-export async function checkBlank() {
-    try {
-        let d = AtmelDFU.deviceInfo.find((e) => e.productId === target.productId);
-        if (d === undefined) {
-            console.log('Unknown Device');
-            return;
+        if (message.value === "Lade Manifest...") {
+            message.value = `Firmware ${ver} bereit.`;
         }
 
-        let result = await AtmelDFU.blankCheck(target, 0, d.flashSize - 1);
-        console.log('byteWritten: ' + result.bytesWritten);
-
-        result = await AtmelDFU.getStatus(target);
-        let stat = AtmelDFU.parseStatus(result.data);
-
-        if (stat.bStatus == AtmelDFU.bStatus.OK) {
-            console.log('Blank');
-            message.value = 'Blank';
-        } else if (stat.bStatus === AtmelDFU.bStatus.errCHECK_ERASED) {
-            console.log('Not Blank');
-            message.value = 'Not Blank';
-        } else {
-            console.log('Unknown Error');
-            message.value = 'Unknown Error';
-        }
-
-        status.value = result.status;
-    } catch(e) {
-        device.value = 'Invalid';
-        status.value = 'error';
-        console.log(e);
+    } catch (e) {
+        console.error(e);
+        message.value = "Fehler beim Laden der Versionsinfos.";
+        isError.value = true;
+        latestVersion.value = ""; 
     }
 }
 
-function hexStr(n, digit=2, toUpper=true) {
-    let s = n.toString(16).padStart(digit, '0');
-    if (toUpper)
-        return s.toUpperCase();
-    else
-        return s;
+function startUSBMonitoring() {
+    if (!navigator.usb) return;
+    navigator.usb.getDevices().then(devices => handleDevicesFound(devices));
+    navigator.usb.addEventListener('connect', (e) => analyzeDevice(e.device));
+    navigator.usb.addEventListener('disconnect', (e) => {
+        if (target && target.serialNumber === e.device.serialNumber) target = null;
+        setTimeout(() => navigator.usb.getDevices().then(devices => handleDevicesFound(devices)), 1000);
+    });
+}
+function handleDevicesFound(devices) {
+    const atmelDevice = devices.find(d => d.vendorId === VENDOR_ATMEL);
+    if (atmelDevice) analyzeDevice(atmelDevice);
+}
+function analyzeDevice(device) {
+    if (device.vendorId !== VENDOR_ATMEL) return;
+    if (device.productId === PID_APP_MODE) {
+        isWrongMode.value = true;
+        isError.value = true;
+        message.value = "App-Mode erkannt. Bitte Config Tab nutzen.";
+    } else if (device.productId === PID_DFU_MODE) {
+        isWrongMode.value = false;
+        isError.value = false;
+        message.value = "Bootloader aktiv. Bereit zum Flashen.";
+    }
+}
+
+// --- 2. SERIAL TERMINAL ---
+export async function toggleSerial() {
+    if (isSerialConnected.value) {
+        keepReading = false;
+        if (reader) { try { await reader.cancel(); } catch(e){} reader = null; }
+        if (port) { try { await port.close(); } catch(e){} port = null; }
+        isSerialConnected.value = false;
+        serialLog.value += "\n[Getrennt]\n";
+        return;
+    }
+    if (!navigator.serial) {
+        serialLog.value += "Browser unterstützt kein Web Serial API.\n";
+        return;
+    }
+    try {
+        port = await navigator.serial.requestPort({ filters: [{ usbVendorId: VENDOR_ATMEL }] });
+        await port.open({ baudRate: 38400 });
+        isSerialConnected.value = true;
+        serialLog.value += "[Verbunden]\n";
+        readSerialLoop();
+    } catch (e) {
+        serialLog.value += `Fehler: ${e.message}\n`;
+    }
+}
+
+export async function startConfigScan() {
+    if (!isSerialConnected.value) { alert("Bitte erst verbinden!"); return; }
+    deviceInfo.rawRegs = []; 
+    configScanActive = true; 
+    await sendSerial("V");
+}
+
+async function readSerialLoop() {
+    keepReading = true;
+    const textDecoder = new TextDecoderStream();
+    const readableStreamClosed = port.readable.pipeTo(textDecoder.writable);
+    reader = textDecoder.readable.getReader();
+    let buffer = "";
+    try {
+        while (keepReading) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            if (value) {
+                serialLog.value += value;
+                buffer += value;
+                let lines = buffer.split(/\r?\n/);
+                buffer = lines.pop(); 
+                for (let line of lines) parseSerialLine(line);
+            }
+        }
+    } catch (e) {
+        serialLog.value += `\n[Verbindung unterbrochen]\n`;
+    } finally {
+        isSerialConnected.value = false;
+    }
+}
+
+function parseSerialLine(line) {
+    line = line.trim();
+    if (!line) return;
+    if (line.startsWith("V ")) {
+        const hwMatch = line.match(/(CUL\d+)/); 
+        const fwMatch = line.match(/V\s+([\d\.]+)\s+([^\s]+)/);
+        if (fwMatch) deviceInfo.fwName = fwMatch[2];
+        if (hwMatch) deviceInfo.hwType = hwMatch[1];
+        if (configScanActive) setTimeout(() => sendSerial("C99"), 200);
+    }
+    if (configScanActive && /^[0-9A-F]{16}$/i.test(line)) {
+        for (let i = 0; i < 16; i += 2) deviceInfo.rawRegs.push(parseInt(line.substr(i, 2), 16));
+        if (deviceInfo.rawRegs.length >= 48) {
+            configScanActive = false;
+            decodeCC1101(deviceInfo.rawRegs);
+        }
+    }
+}
+
+function decodeCC1101(regs) {
+    const freqReg = (regs[0x0D] << 16) | (regs[0x0E] << 8) | regs[0x0F];
+    const freqVal = (freqReg * CRYSTAL_FREQ) / 65536.0;
+    deviceInfo.freq = (freqVal / 1000000.0).toFixed(3) + " MHz";
+
+    const mdmcfg4 = regs[0x10];
+    const chanbw_e = (mdmcfg4 >> 6) & 0x03;
+    const chanbw_m = (mdmcfg4 >> 4) & 0x03;
+    const bwVal = CRYSTAL_FREQ / (8 * (4 + chanbw_m) * (1 << chanbw_e));
+    deviceInfo.bw = (bwVal / 1000.0).toFixed(1) + " kHz";
+
+    const modFormat = (regs[0x12] >> 4) & 0x07;
+    const modMap = { 0: "2-FSK", 1: "GFSK", 3: "ASK/OOK", 4: "4-FSK", 7: "MSK" };
+    deviceInfo.mod = modMap[modFormat] || "Unknown";
+
+    const rxOffMode = (regs[0x17] >> 2) & 0x03;
+    deviceInfo.rxState = (rxOffMode === 3) ? "Always On (RX)" : "Idle nach RX";
+    
+    const paIndex = regs[0x22] & 0x07;
+    deviceInfo.power = `PA Index ${paIndex}`;
+}
+
+export async function sendSerial(text) {
+    if (!port || !port.writable) return;
+    const writer = port.writable.getWriter();
+    serialLog.value += `> ${text}\n`;
+    await writer.write(new TextEncoder().encode(text + "\r\n"));
+    writer.releaseLock();
+}
+
+export async function jumpToBootloader() {
+    if (isSerialConnected.value && port) {
+        await sendSerial("B01");
+        return;
+    }
+    try {
+        const p = await navigator.serial.requestPort({ filters: [{ usbVendorId: VENDOR_ATMEL }] });
+        await p.open({ baudRate: 38400 });
+        const w = p.writable.getWriter();
+        await w.write(new TextEncoder().encode("B01\r\n"));
+        await w.releaseLock();
+        setTimeout(() => p.close(), 200);
+    } catch(e) { alert(e.message); }
+}
+
+// --- 4. FLASHING CORE ---
+async function connectDFU() {
+    let devices = await navigator.usb.getDevices();
+    let device = devices.find(d => d.vendorId === VENDOR_ATMEL && d.productId === PID_DFU_MODE);
+    
+    if (!device) {
+        try {
+            device = await navigator.usb.requestDevice({ filters: [{ vendorId: VENDOR_ATMEL }] });
+        } catch (e) {
+            throw new Error("Kein Gerät ausgewählt.");
+        }
+    }
+    
+    if (device.productId === PID_APP_MODE) { 
+        isWrongMode.value = true; 
+        throw new Error("Falscher Modus (App-Mode). Bitte erst in Bootloader wechseln."); 
+    }
+    
+    if (!device.opened) await device.open();
+    if (device.configuration === null) await device.selectConfiguration(1);
+    try { await device.claimInterface(0); } catch(e){}
+    return device;
+}
+
+async function runFlashSequence(hexData) {
+    if(target) { try{await target.close();}catch(e){} target=null; }
+    target = await connectDFU();
+
+    message.value = "Lösche Flash-Speicher...";
+    await AtmelDFU.chipErase(target);
+    
+    message.value = `Schreibe ${hexData.length} Bytes...`;
+    await AtmelDFU.writeMemory(target, 0x0000, hexData.length - 1, hexData);
+    
+    message.value = "Verifiziere Daten...";
+    const mem = await AtmelDFU.readMemory(target, 0, hexData.length - 1);
+    for(let i=0; i<mem.byteLength; i++) if(mem[i]!==hexData[i]) throw new Error("Verify Error");
+    
+    message.value = "Starte CUL neu...";
+    await AtmelDFU.launch(target);
+    
+    isSuccess.value = true; message.value = "Update erfolgreich abgeschlossen!";
+}
+
+export async function programFlash() {
+    if (!firmwareUrl) return;
+    isFlashing.value = true; isError.value = false;
+    try {
+        message.value = "Lade Firmware Datei...";
+        const resp = await fetch(firmwareUrl);
+        if(!resp.ok) throw new Error("Download Fehler");
+        const hex = loadHex(await resp.text());
+        await runFlashSequence(hex);
+    } catch(e) { 
+        console.error(e); 
+        if(!isWrongMode.value) { isError.value = true; message.value = e.message; }
+    } finally { 
+        if(target) { try{await target.close();}catch(e){} target=null; } 
+        isFlashing.value = false; 
+    }
+}
+
+export async function uploadFirmware(file) {
+    isFlashing.value = true; isError.value = false;
+    try {
+        message.value = `Lese Datei ${file.name}...`;
+        const text = await file.text();
+        const hex = loadHex(text);
+        await runFlashSequence(hex);
+    } catch(e) {
+        console.error(e);
+        isError.value = true; message.value = "Fehler: " + e.message;
+    } finally {
+        if(target) { try{await target.close();}catch(e){} target=null; } 
+        isFlashing.value = false; 
+    }
 }
 
 function loadHex(text) {
-    // https://en.wikipedia.org/wiki/Intel_HEX
-    let data = [];
-    let ext_addr = 0;
-    let processed = 0;
-    let lines = text.split(/\r?\n/);
+    let data = []; let ext_addr = 0; let lines = text.split(/\r?\n/);
     for (let index = 0; index < lines.length; index++) {
-        //   DATA:  ':'   dlen    addr    '00'  data        chkSum
-        //    EOF:  ':'  '00'     '0000'  '01'              chkSum
-        //    EXT:  ':'  '02'     '0000'  '02'  address     chkSum
-        //   segm:  ':'  '04'     '0000'  '03'  CS+IP       chkSum
-        // hiaddr:  ':'  '02'     '0000'  '04'  address     chkSum
-        //   addr:  ':'  '04'     '0000'  '05'  address     chkSum
-        if (lines[index].length == 0) {
-            continue;
-        }
-
-        let line = lines[index].trim();
-        if (line.length < 11)   { throw new Error(`Invalid at line ${index + 1}`) }
-        if (line.at(0) !== ':') { throw new Error(`Invalid at line ${index + 1}`) }
-
+        let line = lines[index].trim(); if (line.length < 11 || line.at(0) !== ':') continue;
         let bytes = line.slice(1).match(/[0-9a-fA-F]{2}/g).map((h) => parseInt(h,16));
-
-        let checkSum = bytes.pop();
-        let sum = bytes.reduce((a, c) => a + c, 0);
-        if (checkSum !== (-sum & 0xff)) { throw new Error(`Checksum error at line ${index + 1}`) }
-
-        let dlen = bytes.shift();
-        let addr = bytes.shift() << 8 | bytes.shift();
-        let type = bytes.shift();
-
-        switch (type) {
-            case 0: // DATA
-                if (data.length < ext_addr + addr) {
-                    //console.log(`loadHex: skip from: ${data.length}, to: ${ext_addr + addr}`);
-                    for (let i = data.length; i < ext_addr + addr; i++) {
-                        data.push(0xff); // blank
-                    }
-                } else if (data.length > ext_addr + addr) {
-                    throw new Error(`Address error at line ${index + 1}`);
-                }
-                data.push(...bytes);
-                break;
-            case 1: // EOF
-                // should stop?
-                //console.log(`loadHex: EOF at line ${index + 1}`);
-                break;
-            case 2: // Extended Segment Address
-                if (2 !== bytes.length) throw new Error(`Invalid record at line ${index + 1}`);
-                ext_addr = ((bytes[0] << 8) | bytes[1]) * 16;
-                console.log(`loadHex: Extended Segment Address: ${ext_addr} at line ${index + 1}`);
-                break;
-            case 4: // Extended Linear Address
-                if (2 !== bytes.length) throw new Error(`Invalid record at line ${index + 1}`);
-                ext_addr = ((bytes[0] << 8) | bytes[1]) << 16;
-                console.log(`loadHex: Extended Segment Address: ${ext_addr} at line ${index + 1}`);
-                break;
-
-            case 3: // Start Segment Address
-            case 5: // Start Linear Address
-                console.log(`loadHex: Not supported record type ${type} at line ${index + 1}`);
-                break;
-
-            default:
-                throw new Error(`loadHex: Invalid record type ${type} at line ${index + 1}`);
-        }
-        processed++;
+        let type = bytes[3]; let addr = (bytes[1] << 8) | bytes[2]; let payload = bytes.slice(4, 4+bytes[0]);
+        if (type === 0) {
+            if (data.length < ext_addr + addr) for (let i = data.length; i < ext_addr + addr; i++) data.push(0xff);
+            data.push(...payload);
+        } else if (type === 2) ext_addr = ((payload[0] << 8) | payload[1]) * 16;
+        else if (type === 4) ext_addr = ((payload[0] << 8) | payload[1]) << 16;
     }
     return data;
 }
 
-export async function programFlash() {
-    try {
-        // read hex file
-        let hexFile = document.querySelector("#hexFile");
-	if (hexFile.files.length == 0) {
-            message.value = 'No file is specified.';
-            return;
-        }
-        let text = await hexFile.files[0].text();
-        let data = loadHex(text);
-
-        // close previous device
-        if (target !== null) {
-            await target.close();
-            target = null;
-        }
-        target = await AtmelDFU.getAtmelDevice();
-        if (target === null) {
-            return;
-        }
-        device.value = target.productName;
-        console.log(`Selected: ${target.productName}`);
-
-        // find device info
-        let d = AtmelDFU.deviceInfo.find((e) => e.productId === target.productId);
-        if (d === undefined) {
-            message.value = 'Unknown Device';
-            return;
-        }
-        if (data.length > d.flashSize) {
-            message.value = 'Specified firmware is larger than Flash space.';
-            return;
-        }
-
-        message.value = 'Erasing Flash...';
-        let result = await AtmelDFU.chipErase(target);
-
-        message.value = 'Writing Flash...';
-        result = await AtmelDFU.writeMemory(target, 0x0000, data.length - 1, data);
-
-        message.value = 'Verifing...';
-        let mem = await AtmelDFU.readMemory(target, 0, data.length - 1);
-
-        for (let i = 0; i < mem.byteLength; i++) {
-            if (mem[i] !== data[i]) {
-                console.log(hexStr(i, 4) + ': ' + hexStr(mem[i]));
-                message.value = `Failed to verify at ${hexStr(i, 4)}`;
-                return;
-            }
-        }
-
-        message.value = 'Launching...';
-        result = await AtmelDFU.launch(target);
-        status.value = result.status;
-
-        message.value = `Done. Wrote Flash ${data.length} bytes.`;
-    } catch (e) {
-        message.value = 'Error on programming flash';
-        status.value = 'Error on programming flash';
-        console.log(e);
-    } finally {
-        if (target !== null) {
-            await target.close();
-        }
-        target = null;
-        device.value = 'Not selected';
-    }
-}
-
-export async function writeFlash() {
-    try {
-        // read hex file
-        let hexFile = document.querySelector("#flashFile");
-	if (hexFile.files.length == 0) {
-            message.value = 'No file is specified.';
-            return;
-        }
-        let text = await hexFile.files[0].text();
-        let data = loadHex(text);
-
-        // write
-        message.value = 'Writing Flash...';
-        let result = await AtmelDFU.writeMemory(target, 0x0000, data.length - 1, data);
-
-        // verify
-        message.value = 'Verifing...';
-        let mem = await AtmelDFU.readMemory(target, 0, data.length - 1);
-
-        for (let i = 0; i < mem.byteLength; i++) {
-            if (mem[i] !== data[i]) {
-                console.log(hexStr(i, 4) + ': ' + hexStr(mem[i]));
-                message.value = `Failed to verify at ${hexStr(i, 4)}`;
-                return;
-            }
-        }
-        message.value = `Done. Wrote Flash ${data.length} bytes.`;
-    } catch (e) {
-        message.value = 'Error on writing flash';
-        status.value = 'Error on writing flash';
-        console.log(e);
-        console.log(e.message);
-        console.log(e.name);
-    }
-}
-
-export async function readFlash() {
-    try {
-        let d = AtmelDFU.deviceInfo.find((e) => e.productId === target.productId);
-        if (d === undefined) {
-            console.log('Unknown Device');
-            return;
-        }
-
-        let end = d.flashSize - 1;
-        //let end = d.flashSize - d.bootSize;
-
-        message.value = 'Reading Flash...';
-        let mem = await AtmelDFU.readMemory(target, 0, end, false);
-        message.value = 'Done';
-
-        // download link
-        let link = document.querySelector('#flash-link');
-        let button = document.querySelector('#flash-download');
-        button.addEventListener("click", (e) => { link.click(); });
-
-        window.URL.revokeObjectURL(link.getAttribute("href"));
-        let blob = new Blob([mem], { type: "image/jpeg" });
-        let file =  window.URL.createObjectURL(blob);
-        link.setAttribute("href", file);
-        link.setAttribute("download", "flash.bin");
-        button.removeAttribute("disabled");
-    } catch (e) {
-        console.log(e);
-    }
-}
-
-export async function clearEEPROM() {
-    try {
-        let d = AtmelDFU.deviceInfo.find((e) => e.productId === target.productId);
-        if (d === undefined) {
-            console.log('Unknown Device');
-            return;
-        }
-        let end = d.eepromSize - 1;
-
-        let data = new Uint8Array(d.eepromSize);
-        data.fill(0xff, 0, d.eepromSize);
-
-        // write
-        message.value = 'Writing EEPROM...';
-        let result = await AtmelDFU.writeMemory(target, 0, end, data, true);
-
-        // verify
-        message.value = 'Verifing...';
-        let mem = await AtmelDFU.readMemory(target, 0, end, true);
-
-        for (let i = 0; i < mem.byteLength; i++) {
-            if (mem[i] !== data[i]) {
-                console.log(hexStr(i, 4) + ': ' + hexStr(mem[i]));
-                message.value = `Failed to verify at ${hexStr(i, 4)}`;
-                return;
-            }
-        }
-        message.value = `Done. Wrote EEPROM ${data.length} bytes.`;
-    } catch (e) {
-        message.value = 'Error on writing EEPROM';
-        status.value = 'Error on writing EEPROM';
-        console.log(e);
-        console.log(e.message);
-        console.log(e.name);
-    }
-}
-
-export async function writeEEPROM() {
-    try {
-        let d = AtmelDFU.deviceInfo.find((e) => e.productId === target.productId);
-        if (d === undefined) {
-            console.log('Unknown Device');
-            return;
-        }
-        let end = d.eepromSize - 1;
-
-        // read hex file
-        let hexFile = document.querySelector("#eepromFile");
-	if (hexFile.files.length == 0) {
-            message.value = 'No file is specified.';
-            return;
-        }
-        let text = await hexFile.files[0].text();
-        let data = loadHex(text);
-
-        // write
-        message.value = 'Writing EEPROM...';
-        let result = await AtmelDFU.writeMemory(target, 0, data.length - 1, data, true);
-
-        // verify
-        message.value = 'Verifing...';
-        let mem = await AtmelDFU.readMemory(target, 0, data.length - 1, true);
-
-        for (let i = 0; i < mem.byteLength; i++) {
-            if (mem[i] !== data[i]) {
-                console.log(hexStr(i, 4) + ': ' + hexStr(mem[i]));
-                message.value = `Failed to verify at ${hexStr(i, 4)}`;
-                return;
-            }
-        }
-        message.value = `Done. Wrote EEPROM ${data.length} bytes.`;
-    } catch (e) {
-        message.value = 'Error on writing EEPROM';
-        status.value = 'Error on writing EEPROM';
-        console.log(e);
-        console.log(e.message);
-        console.log(e.name);
-    }
-}
-
-export async function readEEPROM() {
-    try {
-        let d = AtmelDFU.deviceInfo.find((e) => e.productId === target.productId);
-        if (d === undefined) {
-            console.log('Unknown Device');
-            return;
-        }
-        let end = d.eepromSize - 1;
-
-        message.value = 'Reading EEPROM...';
-        let mem = await AtmelDFU.readMemory(target, 0, end, true);
-        message.value = 'Done';
-
-        // download link
-        let link = document.querySelector('#eeprom-link');
-        let button = document.querySelector('#eeprom-download');
-        button.addEventListener("click", (e) => { link.click(); });
-
-        window.URL.revokeObjectURL(link.getAttribute("href"));
-        let blob = new Blob([mem], { type: "image/jpeg" });
-        let file =  window.URL.createObjectURL(blob);
-        link.setAttribute("href", file);
-        link.setAttribute("download", "eeprom.bin");
-        button.removeAttribute("disabled");
-    } catch (e) {
-        console.log(e);
-    }
-}
-
-export async function startApp() {
-    try {
-        let result = await AtmelDFU.launch(target);
-        status.value = result.status;   // 'ok' or 'stall'
-    } catch(e) {
-        device.value = 'Invalid';
-        status.value = 'error';
-        console.log(e);
-    } finally {
-        target = null;
-        device.value = 'Not selected';
-    }
-}
-
-export async function recoverError() {
-    try {
-        let result = await AtmelDFU.clearStatus(target);
-        if (result.status !== 'ok') {
-            console.log('aborting...');
-            result = await abort(target);
-        }
-        status.value = result.status;
-        console.log('status: ' + result.status);
-    } catch(e) {
-        device.value = 'Invalid';
-        status.value = 'error';
-        console.log(e);
-    }
-}
+export async function selectDevice() { try{ target = await connectDFU(); message.value="Verbunden"; }catch(e){message.value=e.message;} }
+export async function eraseChip() { if(target) AtmelDFU.chipErase(target); }
