@@ -1,6 +1,16 @@
 <!DOCTYPE html>
 <html lang="de">
 <head>
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://raw.githubusercontent.com; base-uri 'none'; form-action 'none'">
+    <!-- 'unsafe-eval' ist zwingend: der vendored Vue-Full-Build kompiliert das
+         In-DOM-Template zur Laufzeit via Function(String) (verifizierbar in
+         vendor/vue.esm-browser.prod.js). Weg dahin ohne 'unsafe-eval' =
+         Template-Precompile / Render-Funktionen (v1.1). 'unsafe-eval' erlaubt
+         KEINE Inline-Scripts/-Handler → injiziertes <script>/<img onerror>
+         bleibt geblockt.
+         frame-ancestors bewusst NICHT hier: wird in <meta>-CSP ignoriert
+         (nur als HTTP-Header wirksam) → Clickjacking-Schutz ggf. am Server
+         (nginx: add_header X-Frame-Options DENY / CSP frame-ancestors). -->
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>busware CUL Tool</title>
@@ -115,22 +125,12 @@
         </div>
     </div>
 
-    <script type="importmap">
-        { "imports": { "vue": "https://unpkg.com/vue@3/dist/vue.esm-browser.js" } }
-    </script>
-
-    <script>
-        // Check WebUSB/WebSerial
-        if (!('usb' in navigator) && !('serial' in navigator)) {
-            document.getElementById('unsupported-browser').style.display = 'block';
-            document.write('<style>#app { display: none !important; }</style>');
-        }
-    </script>
+    <script src="./boot.js"></script>
 
     <div class="container" id="app" v-cloak>
         <header class="app-header">
             <img src="busware.png" alt="busware.de" class="logo-img" width="314" height="50">
-            <div class="app-subtitle">CUL Service Tool</div>
+            <div class="app-subtitle">CUL Service Tool <span style="opacity:.5;">v{{ appVersion }}</span></div>
             <button class="info-btn" @click="showReadmeModal">ℹ</button>
         </header>
 
@@ -252,87 +252,6 @@
 
     </div>
 
-    <script type="module">
-        import { createApp, ref, watch, nextTick, computed } from 'vue'
-        import * as FlashOnWeb from './FlashOnWeb.js'
-        import { marked } from 'https://cdn.jsdelivr.net/npm/marked/lib/marked.esm.js';
-
-        // Check again inside module to be safe
-        if ('usb' in navigator || 'serial' in navigator) {
-            FlashOnWeb.init();
-
-            createApp({
-              setup() {
-                const currentTab = ref('update');
-                const serialInput = ref('');
-                const showModal = ref(false);
-                const modalText = ref('');
-                const pendingCmd = ref('');
-                const showReadme = ref(false);
-                
-                const parsedReadme = computed(() => {
-                    return FlashOnWeb.readmeText.value ? marked.parse(FlashOnWeb.readmeText.value) : "Lade...";
-                });
-
-                watch(FlashOnWeb.serialLog, () => {
-                    nextTick(() => {
-                        const el = document.getElementById('termWin');
-                        if(el) el.scrollTop = el.scrollHeight;
-                    });
-                });
-
-                const triggerSend = () => {
-                    if(!serialInput.value) return;
-                    FlashOnWeb.sendSerial(serialInput.value);
-                    serialInput.value = '';
-                };
-
-                const askConfirm = (cmd) => {
-                    pendingCmd.value = cmd;
-                    if (cmd === 'e') {
-                        modalText.value = "Werkseinstellungen laden & Neustart?";
-                    } else if (cmd === 'B01') {
-                        modalText.value = "In den Bootloader neustarten?<br>Verbindung wird getrennt.";
-                    } else {
-                        modalText.value = "Befehl senden?";
-                    }
-                    showModal.value = true;
-                };
-
-                const executeConfirm = () => {
-                    showModal.value = false;
-                    if (pendingCmd.value === 'B01') {
-                        FlashOnWeb.jumpToBootloader();
-                    } else {
-                        FlashOnWeb.sendSerial(pendingCmd.value);
-                    }
-                };
-
-                const triggerFileSelect = () => {
-                    document.getElementById('hexInput').click();
-                };
-                
-                const handleFileUpload = (e) => {
-                    const file = e.target.files[0];
-                    if(file) FlashOnWeb.uploadFirmware(file);
-                    e.target.value = null; 
-                };
-
-                const showReadmeModal = () => {
-                    FlashOnWeb.fetchReadme();
-                    showReadme.value = true;
-                }
-
-                return {
-                    currentTab, serialInput, triggerSend,
-                    showModal, modalText, askConfirm, executeConfirm,
-                    triggerFileSelect, handleFileUpload,
-                    showReadme, parsedReadme, showReadmeModal,
-                    ...FlashOnWeb
-                }
-              }
-            }).mount('#app')
-        }
-    </script>
+    <script type="module" src="./app.js"></script>
 </body>
 </html>

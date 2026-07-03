@@ -1,4 +1,4 @@
-import { ref, reactive } from "vue";
+import { ref, reactive } from "./vendor/vue.esm-browser.prod.js";
 import * as AtmelDFU from './AtmelDFU.js';
 
 // --- KONSTANTEN ---
@@ -31,6 +31,8 @@ let port = null;
 let reader = null;
 let readableStreamClosed = null;
 let configScanActive = false;
+let configScanTimer = null;
+let serialWriteChain = Promise.resolve();
 
 // --- INIT ---
 export function init() {
@@ -51,6 +53,13 @@ export async function fetchReadme() {
 }
 
 // --- 1. FIRMWARE & MANIFEST ---
+// Trust-Model: Manifest und .hex kommen vom master-Branch des vendor-eigenen
+// Repos tostmann/a-culfw. Der Read-Back-Verify nach dem Flash beweist
+// flash == download, NICHT die Herkunft/Authentizität der Bytes — die
+// Vertrauensgrenze ist also das a-culfw-Repo + GitHub. Bewusste Entscheidung
+// für v1.0. Höhere Sicherheit (Out-of-band-Signatur über die .hex gegen einen
+// Key ausserhalb des Repos + Anzeige von Version/Hash vor dem Flash) ist für
+// eine spätere Version vorgesehen.
 async function fetchLatestVersion() {
     isError.value = false;
     message.value = "Lade Manifest..."; 
@@ -143,6 +152,7 @@ async function closeSerial() {
         } catch (e) { console.warn(e); }
         reader = null;
     }
+    readableStreamClosed = null;
     if (port) {
         try { await port.close(); } catch (e) { console.warn(e); }
         port = null;
@@ -171,7 +181,10 @@ async function readSerialLoop() {
     } catch (e) {
         console.error("Read loop error:", e);
         serialLog.value += `\n[Verbindung unterbrochen]\n`;
-        isSerialConnected.value = false;
+        // Abnormaler Exit (Unplug / Geräte-Reset nach B01): Port sauber
+        // schließen und Referenzen nullen, statt sie bis zum nächsten
+        // Connect dangeln zu lassen. closeSerial ist best-effort/idempotent.
+        await closeSerial();
     } finally {
         if (reader) reader.releaseLock();
     }
@@ -181,8 +194,10 @@ async function readSerialLoop() {
 
 export async function startConfigScan() {
     if (!isSerialConnected.value) { alert("Bitte erst verbinden!"); return; }
-    deviceInfo.rawRegs = []; 
-    configScanActive = true; 
+    deviceInfo.rawRegs = [];
+    configScanActive = true;
+    if (configScanTimer) clearTimeout(configScanTimer);
+    configScanTimer = setTimeout(() => { configScanActive = false; deviceInfo.rawRegs = []; configScanTimer = null; }, 1500);
     await sendSerial("V");
 }
 
@@ -190,9 +205,9 @@ function parseSerialLine(line) {
     line = line.trim();
     if (!line) return;
     if (line.startsWith("V ")) {
-        const hwMatch = line.match(/(CUL\d+)/); 
+        const hwMatch = line.match(/(CUL\w+)/);
         const fwMatch = line.match(/V\s+([\d\.]+)\s+([^\s]+)/);
-        if (fwMatch) deviceInfo.fwName = fwMatch[2];
+        if (fwMatch) deviceInfo.fwName = fwMatch[1] + " " + fwMatch[2];
         if (hwMatch) deviceInfo.hwType = hwMatch[1];
         if (configScanActive) setTimeout(() => sendSerial("C99"), 200);
     }
@@ -200,7 +215,8 @@ function parseSerialLine(line) {
         for (let i = 0; i < 16; i += 2) deviceInfo.rawRegs.push(parseInt(line.substr(i, 2), 16));
         if (deviceInfo.rawRegs.length >= 48) {
             configScanActive = false;
-            decodeCC1101(deviceInfo.rawRegs);
+            if (configScanTimer) { clearTimeout(configScanTimer); configScanTimer = null; }
+            decodeCC1101(deviceInfo.rawRegs.slice(0, 48));
         }
     }
 }
@@ -227,17 +243,34 @@ function decodeCC1101(regs) {
     deviceInfo.power = `PA Index ${paIndex}`;
 }
 
-export async function sendSerial(text) {
-    if (!port || !port.writable) return;
-    const writer = port.writable.getWriter();
-    await writer.write(new TextEncoder().encode(text + "\r\n"));
-    writer.releaseLock();
-    serialLog.value += `> ${text}\n`;
+export function sendSerial(text) {
+    // Writes über eine Single-Writer-Queue serialisieren: sonst wirft ein
+    // zweiter getWriter() während eines laufenden write() synchron
+    // ('WritableStream is locked') und das Kommando geht still verloren
+    // (z.B. der setTimeout-C99 während eines manuellen Sends).
+    serialWriteChain = serialWriteChain.then(async () => {
+        if (!port || !port.writable) return;
+        let writer = null;
+        try {
+            writer = port.writable.getWriter();
+            await writer.write(new TextEncoder().encode(text + "\r\n"));
+            serialLog.value += `> ${text}\n`;
+        } catch (e) {
+            serialLog.value += `\n[Sende-Fehler: ${e.message}]\n`;
+        } finally {
+            if (writer) { try { writer.releaseLock(); } catch (_) {} }
+        }
+    });
+    return serialWriteChain;
 }
 
 export async function jumpToBootloader() {
     if (isSerialConnected.value && port) {
         await sendSerial("B01");
+        // B01 re-enumeriert den ATmega32U4 in den DFU-Mode → CDC-Port stirbt.
+        // Aktiv schließen, damit State konsistent bleibt (nicht auf den
+        // Read-Loop-Fehlerpfad warten).
+        await closeSerial();
         return;
     }
     try {
@@ -252,6 +285,7 @@ export async function jumpToBootloader() {
 
 // --- 4. FLASHING CORE ---
 async function connectDFU() {
+    if (!navigator.usb) throw new Error("WebUSB nicht verfügbar — bitte Chrome oder Edge nutzen.");
     let devices = await navigator.usb.getDevices();
     let device = devices.find(d => d.vendorId === VENDOR_ATMEL && d.productId === PID_DFU_MODE);
     
@@ -286,6 +320,10 @@ async function runFlashSequence(hexData) {
     
     try {
         target = await connectDFU();
+
+        const _dev = AtmelDFU.deviceInfo.find(d => d.productId === target.productId);
+        if (_dev && hexData.length > _dev.flashSize - _dev.bootSize)
+            throw new Error(`Firmware zu groß (${hexData.length} B > App-Bereich ${_dev.flashSize - _dev.bootSize} B) — falscher Chip oder Datei?`);
 
         message.value = "Lösche Flash-Speicher...";
         await AtmelDFU.chipErase(target);
@@ -344,17 +382,23 @@ export async function uploadFirmware(file) {
 }
 
 function loadHex(text) {
+    const MAX_ADDR = 0x40000; // Obergrenze gegen Type-4-Adress-Blaehung (DoS)
     let data = []; let ext_addr = 0; let lines = text.split(/\r?\n/);
     for (let index = 0; index < lines.length; index++) {
         let line = lines[index].trim(); if (line.length < 11 || line.at(0) !== ':') continue;
         let bytes = line.slice(1).match(/[0-9a-fA-F]{2}/g).map((h) => parseInt(h,16));
-        let type = bytes[3]; let addr = (bytes[1] << 8) | bytes[2]; let payload = bytes.slice(4, 4+bytes[0]);
+        let len = bytes[0];
+        if (bytes.length !== len + 5) throw new Error(`HEX Zeile ${index+1}: Laenge falsch`);
+        if ((bytes.reduce((a, b) => a + b, 0) & 0xff) !== 0) throw new Error(`HEX Zeile ${index+1}: Pruefsumme`);
+        let type = bytes[3]; let addr = (bytes[1] << 8) | bytes[2]; let payload = bytes.slice(4, 4 + len);
         if (type === 0) {
-            if (data.length < ext_addr + addr) for (let i = data.length; i < ext_addr + addr; i++) data.push(0xff);
-            data.push(...payload);
+            let base = ext_addr + addr;
+            if (base < 0 || base + payload.length > MAX_ADDR) throw new Error(`HEX: Adresse 0x${base.toString(16)} ausserhalb`);
+            for (let i = 0; i < payload.length; i++) data[base + i] = payload[i];
         } else if (type === 2) ext_addr = ((payload[0] << 8) | payload[1]) * 16;
         else if (type === 4) ext_addr = ((payload[0] << 8) | payload[1]) << 16;
     }
+    for (let i = 0; i < data.length; i++) if (data[i] === undefined) data[i] = 0xff;
     return data;
 }
 

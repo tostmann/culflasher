@@ -107,6 +107,36 @@ export function getStatus(dev) {
     );
 };
 
+// Bounded GETSTATUS-Poll: fragt den DFU-Status ab bis der State idle ist,
+// ehrt bwPollTimeOut zwischen den Abfragen und wirft bei echtem bStatus-Fehler
+// (errERASE / errWRITE / errADDRESS ...). Erreicht der State das Idle nicht
+// (untypische Bootloader-Antwort), wird nach maxTries LENIENT weitergelaufen
+// — das Read-Back-Verify in runFlashSequence bleibt das eigentliche
+// Sicherheitsnetz, so entsteht keine Regression ggü. dem alten poll-freien Pfad.
+export async function pollStatusUntilReady(dev, ctx = 'DFU', maxTries = 100) {
+    let hiccups = 0;
+    for (let i = 0; i < maxTries; i++) {
+        const res = await getStatus(dev);
+        // Transienter Transport-Hiccup (status!=='ok' / keine Daten): NICHT werfen
+        // — konsistent zu writeMemory/readMemory, die denselben getStatus tolerant
+        // prüfen, und damit der Erase-Pfad beweisbar nicht fragiler ist als der
+        // alte poll-freie. Ein paar Mal tolerieren, dann lenient aufgeben.
+        if (res.status !== 'ok' || !res.data) {
+            if (++hiccups > 5) return null;
+            await new Promise(r => setTimeout(r, 20));
+            continue;
+        }
+        const st = parseStatus(res.data);
+        if (st.bStatus !== bStatus.OK)   // echter DFU-Fehler (errERASE/errWRITE ...) → melden
+            throw new Error(`${ctx}: DFU-Fehler bStatus=${st.bStatus} bState=${st.bState}`);
+        if (st.bState === bState.dfuIDLE || st.bState === bState.dfuDNLOAD_IDLE || st.bState === bState.appIDLE)
+            return st;
+        const wait = Math.min(Math.max(st.bwPollTimeOut, 5), 1000);
+        await new Promise(r => setTimeout(r, wait));
+    }
+    return null; // lenient: kein Idle, aber auch kein Fehler → weiter (Verify greift)
+};
+
 export function selectPage(dev, page) {
     const cmd = new Uint8Array([ 0x06, 0x03, 0x00, 0x00 ]);
     cmd[3] = page;
@@ -182,12 +212,17 @@ export async function writeMemory(dev, start, end, data, eeprom = false) {
     let result;
     let count = 0;
 
-    while (_start < end) {
+    while (_start <= end) {
         if (page !== Math.floor(_start / PAGE_SIZE)) {
             page = Math.floor(_start / PAGE_SIZE);
             result = await selectPage(dev, page);
             if (result.status != 'ok') throw new Error('selectPage failure');
-            result = await getStatus(dev);
+            const gs = await getStatus(dev);
+            if (gs.status === 'ok' && gs.data) {
+                const st = parseStatus(gs.data);
+                if (st.bStatus !== bStatus.OK)
+                    throw new Error(`writeMemory: DFU-Fehler bStatus=${st.bStatus} (bState=${st.bState})`);
+            }
         }
 
         _end = _start + TRANSFER_SIZE - 1;
@@ -251,11 +286,17 @@ export async function readMemory(dev, start, end, eeprom = false) {
     let result;
     let buf = new Uint8Array(end - start + 1);
 
-    while (_start < end) {
+    while (_start <= end) {
         if (page !== Math.floor(_start / PAGE_SIZE)) {
             page = Math.floor(_start / PAGE_SIZE);
             result = await selectPage(dev, page);
-            result = await getStatus(dev);
+            if (result.status != 'ok') throw new Error('selectPage failure');
+            const gs = await getStatus(dev);
+            if (gs.status === 'ok' && gs.data) {
+                const st = parseStatus(gs.data);
+                if (st.bStatus !== bStatus.OK)
+                    throw new Error(`readMemory: DFU-Fehler bStatus=${st.bStatus} (bState=${st.bState})`);
+            }
         }
 
         _end = _start + TRANSFER_SIZE - 1;
@@ -276,9 +317,9 @@ export async function readMemory(dev, start, end, eeprom = false) {
     return buf;
 }
 
-export function chipErase(dev) {
+export async function chipErase(dev) {
     const cmd = new Uint8Array([ 0x04, 0x00, 0xff ]);
-    return dev.controlTransferOut(
+    const res = await dev.controlTransferOut(
         {
             requestType:    'class',
             recipient:      'interface',
@@ -288,6 +329,11 @@ export function chipErase(dev) {
         },
         cmd
     );
+    if (res.status !== 'ok') throw new Error('chipErase DNLOAD failure');
+    // Erase-Completion abwarten statt sofort weiterzuschreiben: pollt GETSTATUS
+    // bis idle und meldet einen echten errERASE als klaren Fehler.
+    await pollStatusUntilReady(dev, 'chipErase');
+    return res;
 }
 
 export function blankCheck(dev, start, end) {

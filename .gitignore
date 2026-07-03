@@ -1,0 +1,21 @@
+# NIEMALS in Git (projekt-übergreifende Forbidden-Files-Regel)
+CLAUDE.md
+MEMORY.md
+GEMINI.md
+FACTS.md
+HARDWARE_STATUS.md
+.env
+.env.*
+*.env
+*.key
+*.pem
+*.log
+schematics/
+datasheets/
+datasheet/
+__pycache__/
+.claude/
+
+# culflasher-spezifisch
+scratch/
+*.tmp

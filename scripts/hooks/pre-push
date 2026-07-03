@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# Public-Repo-Push-Policy (culflasher, origin = github.com/tostmann/culflasher):
+#   GitHub bekommt NUR konsolidierte Release-Commits — niemals Build-Snapshots,
+#   niemals Forbidden-Files (Agent-Doku, Secrets, Interna).
+#
+# Override für absichtliche History-Bereinigung:  ALLOW_SNAPSHOT_PUSH=1 git push ...
+#
+# Installiert via scripts/install-hooks.sh nach .git/hooks/pre-push.
+set -euo pipefail
+
+remote_name="$1"
+remote_url="$2"
+
+# Nur github/origin filtern — lokale Backup-Remotes sind ausgenommen.
+case "$remote_url" in
+  *github.com*) ;;
+  *) exit 0 ;;
+esac
+
+zero="0000000000000000000000000000000000000000"
+fail=0
+
+# Forbidden-Files-Muster (projekt-übergreifende Regel).
+FORBIDDEN='(^|/)(CLAUDE\.md|MEMORY\.md|GEMINI\.md|FACTS\.md|HARDWARE_STATUS\.md|.*\.env(\..*)?|.*\.key|.*\.pem|.*\.log)$|(^|/)(schematics|datasheets?|__pycache__|\.claude)/'
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [ "$local_sha" = "$zero" ] && continue   # Branch-Deletion
+
+  # Forbidden-Files im zu pushenden Tree?
+  bad_files=$(git ls-tree -r --name-only "$local_sha" 2>/dev/null | grep -E "$FORBIDDEN" || true)
+  if [ -n "$bad_files" ]; then
+    echo "[pre-push] BLOCKIERT: verbotene Dateien im Tree von $local_ref:" >&2
+    echo "$bad_files" | sed 's/^/  /' >&2
+    fail=1
+  fi
+
+  if [ "${ALLOW_SNAPSHOT_PUSH:-0}" = "1" ]; then
+    continue
+  fi
+
+  # Range der neu zu übertragenden Commits.
+  if [ "$remote_sha" = "$zero" ]; then
+    range="$local_sha --not --remotes=$remote_name"
+  else
+    range="$remote_sha..$local_sha"
+  fi
+
+  bad_snap=$(git log --format='%H %s' $range 2>/dev/null | grep -E '^[0-9a-f]+ build snapshot v' || true)
+  if [ -n "$bad_snap" ]; then
+    echo "[pre-push] BLOCKIERT: $local_ref -> $remote_ref enthält Snapshot-Commits:" >&2
+    echo "$bad_snap" | sed 's/^/  /' >&2
+    fail=1
+  fi
+done
+
+if [ "$fail" = "1" ]; then
+  cat >&2 <<'EOF'
+
+Public-Repo-Push-Policy: GitHub bekommt nur getaggte Releases (keine Snapshots),
+und niemals Forbidden-Files. Release-Workflow:
+  git reset --soft <last-release-tag>      # alle Änderungen seit Release staged
+  git commit -m "release: vX.Y.Z — <desc>" # ohne Co-Author
+  git tag -a vX.Y.Z -m "<summary>"
+  git push origin main vX.Y.Z              # explizit, kein Auto-Push
+EOF
+  exit 1
+fi
+exit 0
