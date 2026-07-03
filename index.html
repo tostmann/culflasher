@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="de">
 <head>
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://raw.githubusercontent.com; base-uri 'none'; form-action 'none'">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'">
     <!-- 'unsafe-eval' ist zwingend: der vendored Vue-Full-Build kompiliert das
          In-DOM-Template zur Laufzeit via Function(String) (verifizierbar in
          vendor/vue.esm-browser.prod.js). Weg dahin ohne 'unsafe-eval' =

@@ -53,18 +53,17 @@ export async function fetchReadme() {
 }
 
 // --- 1. FIRMWARE & MANIFEST ---
-// Trust-Model: Manifest und .hex kommen vom master-Branch des vendor-eigenen
-// Repos tostmann/a-culfw. Der Read-Back-Verify nach dem Flash beweist
-// flash == download, NICHT die Herkunft/Authentizität der Bytes — die
-// Vertrauensgrenze ist also das a-culfw-Repo + GitHub. Bewusste Entscheidung
-// für v1.0. Höhere Sicherheit (Out-of-band-Signatur über die .hex gegen einen
-// Key ausserhalb des Repos + Anzeige von Version/Hash vor dem Flash) ist für
-// eine spätere Version vorgesehen.
+// First-party gehostet: manifest.json + CUL_V3.hex liegen SAME-ORIGIN neben
+// dieser App (install.busware.de/cul/). Der Deploy snapshotet sie aus einem
+// exakt gepinnten a-culfw-Commit (scripts/deploy.sh; Herkunft in SOURCE.txt
+// am Ziel) — die ausgelieferte Firmware bewegt sich nur beim Redeploy (kein
+// 'moving master'), Downloads sind im install-Apache-Log zählbar, und die CSP
+// braucht kein raw.githubusercontent.com mehr (connect-src 'self').
 async function fetchLatestVersion() {
     isError.value = false;
-    message.value = "Lade Manifest..."; 
+    message.value = "Lade Manifest...";
     try {
-        const baseUrl = 'https://raw.githubusercontent.com/tostmann/a-culfw/master/binaries/';
+        const baseUrl = './';
         const manifestUrl = baseUrl + 'manifest.json';
         const response = await fetch(manifestUrl);
         if (!response.ok) throw new Error(`Manifest nicht gefunden`);
