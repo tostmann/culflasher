@@ -3,7 +3,7 @@
 Ein browserbasiertes Tool zum Flashen und Konfigurieren von **busware CUL USB-Sticks**.  
 Es ermöglicht Firmware-Updates und Diagnose direkt im Browser (Chrome/Edge), ohne dass lokale Software wie `dfu-programmer` oder Terminal-Programme installiert werden müssen.
 
-🔗 **Live-Tool:** [https://prov.busware.de/culflasher/](https://prov.busware.de/culflasher/)  
+🔗 **Live-Tool:** [https://install.busware.de/cul/](https://install.busware.de/cul/)  
 🔌 **Hardware-Infos:** [busware.de CUL Wiki](https://busware.de/tiki-index.php?page=CUL)
 
 ---
