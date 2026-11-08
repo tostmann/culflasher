@@ -128,7 +128,7 @@ export async function pollStatusUntilReady(dev, ctx = 'DFU', maxTries = 100) {
         }
         const st = parseStatus(res.data);
         if (st.bStatus !== bStatus.OK)   // echter DFU-Fehler (errERASE/errWRITE ...) → melden
-            throw new Error(`${ctx}: DFU-Fehler bStatus=${st.bStatus} bState=${st.bState}`);
+            throw new Error(`${ctx}: DFU error bStatus=${st.bStatus} bState=${st.bState}`);
         if (st.bState === bState.dfuIDLE || st.bState === bState.dfuDNLOAD_IDLE || st.bState === bState.appIDLE)
             return st;
         const wait = Math.min(Math.max(st.bwPollTimeOut, 5), 1000);
@@ -221,7 +221,7 @@ export async function writeMemory(dev, start, end, data, eeprom = false) {
             if (gs.status === 'ok' && gs.data) {
                 const st = parseStatus(gs.data);
                 if (st.bStatus !== bStatus.OK)
-                    throw new Error(`writeMemory: DFU-Fehler bStatus=${st.bStatus} (bState=${st.bState})`);
+                    throw new Error(`writeMemory: DFU error bStatus=${st.bStatus} (bState=${st.bState})`);
             }
         }
 
@@ -295,7 +295,7 @@ export async function readMemory(dev, start, end, eeprom = false) {
             if (gs.status === 'ok' && gs.data) {
                 const st = parseStatus(gs.data);
                 if (st.bStatus !== bStatus.OK)
-                    throw new Error(`readMemory: DFU-Fehler bStatus=${st.bStatus} (bState=${st.bState})`);
+                    throw new Error(`readMemory: DFU error bStatus=${st.bStatus} (bState=${st.bState})`);
             }
         }
 

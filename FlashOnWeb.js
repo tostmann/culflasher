@@ -8,7 +8,7 @@ const PID_APP_MODE = 0x204b;
 const CRYSTAL_FREQ = 26000000;
 
 // --- STATES ---
-export const message = ref('Lade...');
+export const message = ref('Loading...');
 export const latestVersion = ref(''); 
 export const releaseDate = ref('');
 export const isFlashing = ref(false);
@@ -17,7 +17,7 @@ export const isSuccess = ref(false);
 export const isWrongMode = ref(false);
 
 export const isSerialConnected = ref(false);
-export const serialLog = ref("Terminal bereit.\n");
+export const serialLog = ref("Terminal ready.\n");
 export const readmeText = ref("");
 
 export const deviceInfo = reactive({
@@ -45,10 +45,10 @@ export async function fetchReadme() {
     if (readmeText.value) return;
     try {
         const response = await fetch('./README.md');
-        if (!response.ok) throw new Error("README.md nicht gefunden.");
+        if (!response.ok) throw new Error("README.md not found.");
         readmeText.value = await response.text();
     } catch (e) {
-        readmeText.value = "# Fehler\nKonnte Anleitung nicht laden.";
+        readmeText.value = "# Error\nCould not load the guide.";
     }
 }
 
@@ -61,29 +61,29 @@ export async function fetchReadme() {
 // braucht kein raw.githubusercontent.com mehr (connect-src 'self').
 async function fetchLatestVersion() {
     isError.value = false;
-    message.value = "Lade Manifest...";
+    message.value = "Loading manifest...";
     try {
         const baseUrl = './';
         const manifestUrl = baseUrl + 'manifest.json';
         const response = await fetch(manifestUrl);
-        if (!response.ok) throw new Error(`Manifest nicht gefunden`);
+        if (!response.ok) throw new Error(`Manifest not found`);
         const data = await response.json();
         
         const deviceData = data["CUL_V3"];
-        if (!deviceData) throw new Error("CUL_V3 nicht im Manifest");
+        if (!deviceData) throw new Error("CUL_V3 missing from the manifest");
 
         const ver = deviceData.version;
         const filename = deviceData.artifacts?.[0]?.file;
-        if (!filename) throw new Error("Keine Firmware-Datei");
+        if (!filename) throw new Error("No firmware file in the manifest");
 
         latestVersion.value = ver;
         releaseDate.value = deviceData.last_build;
         firmwareUrl = baseUrl + filename;
 
-        if (message.value === "Lade Manifest...") message.value = `Firmware ${ver} bereit.`;
+        if (message.value === "Loading manifest...") message.value = `Firmware ${ver} ready.`;
     } catch (e) {
         console.error(e);
-        message.value = "Fehler beim Laden der Versionsinfos.";
+        message.value = "Could not load the version info.";
         isError.value = true;
         latestVersion.value = ""; 
     }
@@ -107,11 +107,11 @@ function analyzeDevice(device) {
     if (device.productId === PID_APP_MODE) {
         isWrongMode.value = true;
         isError.value = true;
-        message.value = "App-Mode erkannt. Bitte Config Tab nutzen.";
+        message.value = "The stick is running its firmware. Restart it into the bootloader first.";
     } else if (device.productId === PID_DFU_MODE) {
         isWrongMode.value = false;
         isError.value = false;
-        message.value = "Bootloader aktiv. Bereit zum Flashen.";
+        message.value = "Bootloader active. Ready to flash.";
     }
 }
 
@@ -120,12 +120,12 @@ function analyzeDevice(device) {
 export async function toggleSerial() {
     if (isSerialConnected.value) {
         await closeSerial();
-        serialLog.value += "\n[Getrennt]\n";
+        serialLog.value += "\n[Disconnected]\n";
         return;
     }
 
     if (!navigator.serial) {
-        serialLog.value += "Browser unterstützt kein Web Serial API.\n";
+        serialLog.value += "This browser does not support the Web Serial API.\n";
         return;
     }
 
@@ -134,11 +134,11 @@ export async function toggleSerial() {
         port = await navigator.serial.requestPort({ filters: [{ usbVendorId: VENDOR_ATMEL }] });
         await port.open({ baudRate: 38400 });
         isSerialConnected.value = true;
-        serialLog.value += "[Verbunden]\n";
+        serialLog.value += "[Connected]\n";
         readSerialLoop();
     } catch (e) {
         console.error(e);
-        serialLog.value += `Fehler: ${e.message}\n`;
+        serialLog.value += `Error: ${e.message}\n`;
         await closeSerial();
     }
 }
@@ -179,7 +179,7 @@ async function readSerialLoop() {
         }
     } catch (e) {
         console.error("Read loop error:", e);
-        serialLog.value += `\n[Verbindung unterbrochen]\n`;
+        serialLog.value += `\n[Connection lost]\n`;
         // Abnormaler Exit (Unplug / Geräte-Reset nach B01): Port sauber
         // schließen und Referenzen nullen, statt sie bis zum nächsten
         // Connect dangeln zu lassen. closeSerial ist best-effort/idempotent.
@@ -192,7 +192,7 @@ async function readSerialLoop() {
 // --- COMMANDS ---
 
 export async function startConfigScan() {
-    if (!isSerialConnected.value) { alert("Bitte erst verbinden!"); return; }
+    if (!isSerialConnected.value) { alert("Connect first."); return; }
     deviceInfo.rawRegs = [];
     configScanActive = true;
     if (configScanTimer) clearTimeout(configScanTimer);
@@ -236,7 +236,7 @@ function decodeCC1101(regs) {
     deviceInfo.mod = modMap[modFormat] || "Unknown";
 
     const rxOffMode = (regs[0x17] >> 2) & 0x03;
-    deviceInfo.rxState = (rxOffMode === 3) ? "Always On (RX)" : "Idle nach RX";
+    deviceInfo.rxState = (rxOffMode === 3) ? "Always On (RX)" : "Idle after RX";
     
     const paIndex = regs[0x22] & 0x07;
     deviceInfo.power = `PA Index ${paIndex}`;
@@ -255,7 +255,7 @@ export function sendSerial(text) {
             await writer.write(new TextEncoder().encode(text + "\r\n"));
             serialLog.value += `> ${text}\n`;
         } catch (e) {
-            serialLog.value += `\n[Sende-Fehler: ${e.message}]\n`;
+            serialLog.value += `\n[Send error: ${e.message}]\n`;
         } finally {
             if (writer) { try { writer.releaseLock(); } catch (_) {} }
         }
@@ -284,19 +284,19 @@ export async function jumpToBootloader() {
 
 // --- 4. FLASHING CORE ---
 async function connectDFU() {
-    if (!navigator.usb) throw new Error("WebUSB nicht verfügbar — bitte Chrome oder Edge nutzen.");
+    if (!navigator.usb) throw new Error("WebUSB is not available — please use Chrome or Edge.");
     let devices = await navigator.usb.getDevices();
     let device = devices.find(d => d.vendorId === VENDOR_ATMEL && d.productId === PID_DFU_MODE);
     
     if (!device) {
         try {
             device = await navigator.usb.requestDevice({ filters: [{ vendorId: VENDOR_ATMEL }] });
-        } catch (e) { throw new Error("Kein Gerät ausgewählt."); }
+        } catch (e) { throw new Error("No device selected."); }
     }
     
     if (device.productId === PID_APP_MODE) { 
         isWrongMode.value = true; 
-        throw new Error("App-Mode. Bitte erst in Bootloader wechseln."); 
+        throw new Error("The stick is running its firmware. Restart it into the bootloader first."); 
     }
     
     // VERBINDUNGSAUFBAU
@@ -308,7 +308,7 @@ async function connectDFU() {
         await device.claimInterface(0);
     } catch(e) {
         console.error("Claim Error:", e);
-        throw new Error("Zugriff verweigert (Interface Claim Failed). Bitte Zadig prüfen: Treiber muss WinUSB sein!");
+        throw new Error("Access denied (interface claim failed). On Windows, check with Zadig that the driver is WinUSB.");
     }
     
     return device;
@@ -322,23 +322,23 @@ async function runFlashSequence(hexData) {
 
         const _dev = AtmelDFU.deviceInfo.find(d => d.productId === target.productId);
         if (_dev && hexData.length > _dev.flashSize - _dev.bootSize)
-            throw new Error(`Firmware zu groß (${hexData.length} B > App-Bereich ${_dev.flashSize - _dev.bootSize} B) — falscher Chip oder Datei?`);
+            throw new Error(`Firmware too large (${hexData.length} B > application area ${_dev.flashSize - _dev.bootSize} B) — wrong chip or file?`);
 
-        message.value = "Lösche Flash-Speicher...";
+        message.value = "Erasing flash...";
         await AtmelDFU.chipErase(target);
         
-        message.value = `Schreibe ${hexData.length} Bytes...`;
+        message.value = `Writing ${hexData.length} bytes...`;
         await AtmelDFU.writeMemory(target, 0x0000, hexData.length - 1, hexData);
         
-        message.value = "Verifiziere Daten...";
+        message.value = "Verifying...";
         const mem = await AtmelDFU.readMemory(target, 0, hexData.length - 1);
-        for(let i=0; i<mem.byteLength; i++) if(mem[i]!==hexData[i]) throw new Error("Verify Error");
+        for(let i=0; i<mem.byteLength; i++) if(mem[i]!==hexData[i]) throw new Error("Verify error");
         
-        message.value = "Starte CUL neu...";
+        message.value = "Restarting the CUL...";
         await AtmelDFU.launch(target);
         
         isSuccess.value = true; 
-        message.value = "Update erfolgreich abgeschlossen!";
+        message.value = "Update completed.";
         
         // Nach erfolgreichem Flash Verbindung schließen
         try{await target.close();}catch(e){} target=null;
@@ -352,9 +352,9 @@ export async function programFlash() {
     if (!firmwareUrl) return;
     isFlashing.value = true; isError.value = false;
     try {
-        message.value = "Lade Firmware Datei...";
+        message.value = "Downloading firmware...";
         const resp = await fetch(firmwareUrl);
-        if(!resp.ok) throw new Error("Download Fehler");
+        if(!resp.ok) throw new Error("Download failed");
         const hex = loadHex(await resp.text());
         await runFlashSequence(hex);
     } catch(e) { 
@@ -368,13 +368,13 @@ export async function programFlash() {
 export async function uploadFirmware(file) {
     isFlashing.value = true; isError.value = false;
     try {
-        message.value = `Lese Datei ${file.name}...`;
+        message.value = `Reading ${file.name}...`;
         const text = await file.text();
         const hex = loadHex(text);
         await runFlashSequence(hex);
     } catch(e) {
         console.error(e);
-        isError.value = true; message.value = "Fehler: " + e.message;
+        isError.value = true; message.value = "Error: " + e.message;
     } finally {
         isFlashing.value = false; 
     }
@@ -387,12 +387,12 @@ function loadHex(text) {
         let line = lines[index].trim(); if (line.length < 11 || line.at(0) !== ':') continue;
         let bytes = line.slice(1).match(/[0-9a-fA-F]{2}/g).map((h) => parseInt(h,16));
         let len = bytes[0];
-        if (bytes.length !== len + 5) throw new Error(`HEX Zeile ${index+1}: Laenge falsch`);
-        if ((bytes.reduce((a, b) => a + b, 0) & 0xff) !== 0) throw new Error(`HEX Zeile ${index+1}: Pruefsumme`);
+        if (bytes.length !== len + 5) throw new Error(`HEX line ${index+1}: wrong length`);
+        if ((bytes.reduce((a, b) => a + b, 0) & 0xff) !== 0) throw new Error(`HEX line ${index+1}: checksum error`);
         let type = bytes[3]; let addr = (bytes[1] << 8) | bytes[2]; let payload = bytes.slice(4, 4 + len);
         if (type === 0) {
             let base = ext_addr + addr;
-            if (base < 0 || base + payload.length > MAX_ADDR) throw new Error(`HEX: Adresse 0x${base.toString(16)} ausserhalb`);
+            if (base < 0 || base + payload.length > MAX_ADDR) throw new Error(`HEX: address 0x${base.toString(16)} out of range`);
             for (let i = 0; i < payload.length; i++) data[base + i] = payload[i];
         } else if (type === 2) ext_addr = ((payload[0] << 8) | payload[1]) * 16;
         else if (type === 4) ext_addr = ((payload[0] << 8) | payload[1]) << 16;
@@ -405,7 +405,7 @@ function loadHex(text) {
 export async function selectDevice() { 
     try{ 
         target = await connectDFU(); 
-        message.value="Verbunden (DFU Mode)"; 
+        message.value="Connected (DFU mode)"; 
     } catch(e){
         message.value=e.message;
     } 
@@ -415,20 +415,20 @@ export async function eraseChip() {
     try {
         if(!target) target = await connectDFU();
         await AtmelDFU.chipErase(target); 
-        message.value = "Chip vollständig gelöscht.";
+        message.value = "Chip erased.";
     } catch(e) {
-        message.value = "Fehler: " + e.message;
+        message.value = "Error: " + e.message;
     }
 }
 
 export async function startApp() {
     try {
         if(!target) target = await connectDFU();
-        message.value = "Sende Start-Kommando...";
+        message.value = "Sending start command...";
         await AtmelDFU.launch(target);
-        message.value = "Anwendung gestartet (Bootloader verlassen).";
+        message.value = "Application started (bootloader left).";
         try{await target.close();}catch(e){} target=null;
     } catch(e) {
-        message.value = "Fehler: " + e.message;
+        message.value = "Error: " + e.message;
     }
 }

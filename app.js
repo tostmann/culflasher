@@ -26,7 +26,7 @@ if ('usb' in navigator || 'serial' in navigator) {
             // damit ein <img onerror>/<script> in README.md nichts ausfuehrt.
             return FlashOnWeb.readmeText.value
                 ? DOMPurify.sanitize(marked.parse(FlashOnWeb.readmeText.value))
-                : "Lade...";
+                : "Loading...";
         });
 
         watch(FlashOnWeb.serialLog, () => {
@@ -45,11 +45,11 @@ if ('usb' in navigator || 'serial' in navigator) {
         const askConfirm = (cmd) => {
             pendingCmd.value = cmd;
             if (cmd === 'e') {
-                modalText.value = "Werkseinstellungen laden & Neustart?";
+                modalText.value = "Load factory settings and restart?";
             } else if (cmd === 'B01') {
-                modalText.value = "In den Bootloader neustarten?<br>Verbindung wird getrennt.";
+                modalText.value = "Restart into the bootloader?<br>The connection will be closed.";
             } else {
-                modalText.value = "Befehl senden?";
+                modalText.value = "Send command?";
             }
             showModal.value = true;
         };

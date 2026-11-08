@@ -1,69 +1,70 @@
 # busware CUL Web Flasher & Service Tool
 
-Ein browserbasiertes Tool zum Flashen und Konfigurieren von **busware CUL USB-Sticks**.  
-Es ermöglicht Firmware-Updates und Diagnose direkt im Browser (Chrome/Edge), ohne dass lokale Software wie `dfu-programmer` oder Terminal-Programme installiert werden müssen.
+A browser tool to flash and configure **busware CUL USB sticks**.
+It updates the firmware and shows diagnostics directly in the browser (Chrome/Edge), without installing `dfu-programmer` or a terminal program.
 
-🔗 **Live-Tool:** [https://install.busware.de/cul/](https://install.busware.de/cul/)  
-🔌 **Hardware-Infos:** [busware.de CUL Wiki](https://busware.de/tiki-index.php?page=CUL)
+🔗 **Live tool:** [https://install.busware.de/cul/](https://install.busware.de/cul/)  
+🔌 **Hardware info:** [busware.de CUL Wiki](https://busware.de/tiki-index.php?page=CUL)
 
 ---
 
 ## ✨ Features
 
-* **1-Klick Firmware Update:** Lädt automatisch die neueste `a-culfw` Version (via `manifest.json`) direkt von GitHub und flasht den Stick.
-* **Intelligente Erkennung:** Unterscheidet automatisch zwischen **App-Mode** (Laufender Betrieb) und **Bootloader-Mode** (DFU).
-* **Integriertes Terminal:** Senden von CUL-Befehlen (z.B. `V`, `X21`, `e`) direkt im Browser über Web Serial API.
-* **Konfigurations-Decoder:** Liest die Register des CC1101-Chips aus und zeigt wichtige Parameter im Klartext an:
-    * Frequenz (kalkuliert aus Reg `0D`-`0F`)
-    * Bandbreite & Modulation
-    * Sendeleistung (PA Index)
-* **Lokaler Upload:** Möglichkeit, eigene `.hex` Dateien (z.B. Test-Firmware) zu flashen.
-* **Sicherheit:** Warnhinweise vor Aktionen, die die Verbindung trennen (Reset, Bootloader-Jump).
+* **One-click firmware update:** flashes the `a-culfw` release the page ships with; its version is shown above the button. The firmware file comes from the same server as the page.
+* **Mode detection:** tells **firmware mode** (normal operation) from **bootloader mode** (DFU) and offers the restart into the bootloader.
+* **Terminal:** sends CUL commands (e.g. `V`, `X21`, `e`) over the Web Serial API.
+* **Configuration decoder:** reads the CC1101 registers and shows the key settings in plain text:
+    * frequency (from registers `0D`-`0F`)
+    * bandwidth and modulation
+    * output power (PA index)
+* **Local file:** flash your own `.hex` file (e.g. a test firmware).
+* **Safety:** asks before actions that close the connection (reset, jump to the bootloader).
 
 ---
 
-## 🚀 Nutzung
+## 🚀 Usage
 
-Das Tool läuft vollständig clientseitig im Browser. Es werden keine Daten an Server gesendet (außer dem Download der Firmware von GitHub).
+The tool runs entirely in the browser. It sends no data anywhere; the only download is the firmware file from the server that hosts the page.
 
-### Voraussetzungen
-* **Browser:** Google Chrome, Microsoft Edge oder Opera (Browser muss **WebUSB** und **Web Serial** unterstützen).
-* **Verbindung:** Der Stick muss direkt am PC angeschlossen sein.
+### Requirements
+* **Browser:** Google Chrome, Microsoft Edge or Opera (the browser must support **WebUSB** and **Web Serial**).
+* **Connection:** plug the stick directly into the computer.
 
-### Anleitung für Windows-Nutzer
-Windows installiert für den Bootloader oft den falschen Treiber. Damit der Browser Zugriff erhält, muss **einmalig** der Treiber gewechselt werden:
-1.  Stick mit gedrücktem Taster einstecken (Bootloader-Modus).
-2.  Lade [Zadig](https://zadig.akeo.ie/) herunter und starte es.
-3.  Wähle `Options` -> `List All Devices`.
-4.  Wähle das Gerät `ATm32U4DFU`.
-5.  Ändere den Treiber auf **WinUSB** und klicke "Replace Driver".
+### Windows
+Windows often installs the wrong driver for the bootloader. To give the browser access, change the driver **once**:
+1.  Plug the stick in with its button held down (bootloader mode).
+2.  Download and start [Zadig](https://zadig.akeo.ie/).
+3.  Select `Options` -> `List All Devices`.
+4.  Select the device `ATm32U4DFU`.
+5.  Set the driver to **WinUSB** and click "Replace Driver".
 
-Unter **macOS** und **Linux** funktioniert es in der Regel "Out of the Box" (unter Linux sind ggf. udev-Regeln nötig).
+On **macOS** and **Linux** it usually works out of the box (Linux may need udev rules).
 
 ---
 
-## 🛠 Funktionsweise
+## 🛠 How it works
 
-Das Tool besteht aus zwei Hauptkomponenten:
+The tool has two parts:
 
 1.  **Flasher (WebUSB):**
-    Basiert auf dem DFU-Protokoll für Atmel AVR Chips. Der Browser kommuniziert direkt mit dem Bootloader des ATmega32U4.
-    * *Quelle:* Die Firmware wird live via `fetch` vom `a-culfw` GitHub-Repository geladen.
+    Speaks the DFU protocol of the Atmel AVR bootloader; the browser talks directly to the bootloader of the ATmega32U4.
+    * *Source:* the firmware is a pinned `a-culfw` release, deployed next to the page together with its `manifest.json`.
 
 2.  **Terminal (Web Serial API):**
-    Baut eine serielle Verbindung (`/dev/ttyACM0` bzw. `COMx`) zum Stick auf, wenn dieser im App-Modus ist.
-    * Es parst die Antworten des Sticks live, um Version und CC1101-Registerwerte zu extrahieren und in der GUI anzuzeigen.
+    Opens a serial connection (`/dev/ttyACM0` or `COMx`) to the stick while it runs its firmware.
+    * It parses the replies as they arrive to show the version and the CC1101 register values.
 
 ---
 
-## 🏗 Credits & Lizenz
+## 🏗 Credits & License
 
-Dieses Projekt ist ein Fork und eine spezialisierte Weiterentwicklung von **AVRFlashOnWeb**.
+This project is a fork and a specialised continuation of **AVRFlashOnWeb**.
 
-* **Original-Projekt:** [AVRFlashOnWeb](https://github.com/tmk/AVRFlashOnWeb) von [tmk](https://github.com/tmk).
-* **Anpassungen:** * Benutzeroberfläche komplett überarbeitet (Tabs, Dashboard).
-    * Integration der GitHub API zum automatischen Laden von CUL-Firmware.
-    * Hinzufügen eines seriellen Terminals und CC1101-Decoders.
-    * Spezifische Anpassungen für den ATmega32U4 auf CUL-Hardware.
+* **Original project:** [AVRFlashOnWeb](https://github.com/tmk/AVRFlashOnWeb) by [tmk](https://github.com/tmk).
+* **Changes:**
+    * user interface rebuilt (tabs, dashboard)
+    * firmware loaded automatically from a manifest
+    * serial terminal and CC1101 decoder added
+    * adjustments for the ATmega32U4 on CUL hardware
 
-Der Quellcode steht unter der **MIT License**.
+The source code is under the **MIT License**.
